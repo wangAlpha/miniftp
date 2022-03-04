@@ -1,4 +1,9 @@
 use nix::sys::epoll::{EpollCreateFlags, EpollEvent, EpollFlags};
+use nix::sys::socket::accept4;
+use nix::sys::socket::setsockopt;
+use nix::sys::socket::sockopt;
+use nix::sys::socket::SockFlag;
+use nix::unistd::{close, read, write};
 use std::sync::{Arc, Mutex};
 
 use super::server::EventLoop;
@@ -11,37 +16,43 @@ enum State {
     Finished,
     Closed,
 }
+
 pub struct Connection {
     fd: i32,
     state: State,
     write_buf: Vec<u8>,
     read_buf: Vec<u8>,
     event_addd: bool,
-    // TODO: channel
 }
 impl Connection {
-    fn new() -> Self {
+    pub fn new(fd: i32) -> Self {
         Connection {
-            fd: 0,
+            fd,
             state: State::Closed,
             write_buf: Vec::new(),
             read_buf: Vec::new(),
             event_addd: false,
         }
     }
-}
-const NONE_EVENT: EpollFlags = 0;
-const READ_EVENT: EpollFlags = EpollFlags::EEpollFlags::EPOLLIN | EpollFlags::EEpollFlags::EPOLLPRI;
-const WRITE_EVENT: EpollFlags = EpollFlags::EEpollFlags::EPOLLOUT;
+    pub fn accept(listen_fd: i32) -> (i32, Self) {
+        let fd = accept4(listen_fd, SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK).unwrap();
+        setsockopt(fd, sockopt::TcpNoDelay, &true).unwrap();
+        (fd, Connection::new(fd))
+    }
 
-#[derive(Debug)]
-pub struct Channel {
-    fd: i32,
-    events: EpollEvent,  // User-concerned events
-    revents: EpollEvent, // Current events
+    pub fn register_read(&self, event_loop: &mut EventLoop) {
+        event_loop.reregister(self.fd, EpollFlags::EPOLLIN | EpollFlags::EPOLLPRI);
+    }
+    pub fn deregister(&self, event_loop: &mut EventLoop) {
+        event_loop.deregister(self.fd);
+        close(self.fd);
+    }
+    pub fn read(&self) {
+        let mut buf = [0u8; 1024];
+        match read(self.fd, &mut buf) {
+            Ok(n) => print!("read len: {} data: {}", n, String::from_utf8_lossy(&buf)),
+            Err(e) => println!("read error: {}", e),
+        }
+        println!("")
+    }
 }
-
-const EVENT_ERROR: EpollFlags = EpollFlags::EPOLLERR;
-const EVENT_WRITEABLE: EpollFlags = EpollFlags::EPOLLIN;
-const EVENT_READABLE: EpollFlags =
-    EpollFlags::EPOLLOUT | EpollFlags::EPOLLPRI | EpollFlags::EPOLLHUP;
