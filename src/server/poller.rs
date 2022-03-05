@@ -1,3 +1,4 @@
+use log::{info, warn};
 use nix::sys::epoll::{epoll_create1, epoll_ctl, epoll_wait};
 use nix::sys::epoll::{EpollCreateFlags, EpollEvent, EpollFlags, EpollOp};
 
@@ -12,7 +13,7 @@ pub struct Poller {
 impl Poller {
     pub fn new() -> Self {
         let poll_fd = -1;
-        let mut events = vec![EpollEvent::new(EpollFlags::empty(), 0); EVENT_SIZE];
+        let events = vec![EpollEvent::new(EpollFlags::empty(), 0); EVENT_SIZE];
         Poller { events, poll_fd }
     }
     pub fn register(&mut self, listen_fd: i32, interest: EpollFlags) {
@@ -24,7 +25,7 @@ impl Poller {
     pub fn poll(&mut self) -> usize {
         let num_events = epoll_wait(self.poll_fd, &mut self.events, -1).unwrap();
         if num_events == 0 {
-            println!("Nothing happened");
+            warn!("Nothing happened");
         } else if num_events == self.events.len() {
             let events = vec![EpollEvent::new(EpollFlags::empty(), 0); self.events.len()];
             self.events.extend(events.iter());

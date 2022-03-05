@@ -9,3 +9,5 @@ pub mod server;
 pub mod connection;
 #[allow(dead_code)]
 pub mod local_client;
+
+pub mod record_lock;
