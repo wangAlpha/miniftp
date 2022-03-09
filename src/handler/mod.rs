@@ -1,4 +1,7 @@
 #[allow(dead_code)]
-pub mod ftp_codes;
+pub mod cmd;
 #[allow(dead_code)]
-pub mod manager;
+pub mod session;
+
+#[allow(dead_code)]
+pub mod error;

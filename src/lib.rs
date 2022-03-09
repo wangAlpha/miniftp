@@ -1,3 +1,4 @@
+mod handler;
 mod server;
 mod threadpool;
 

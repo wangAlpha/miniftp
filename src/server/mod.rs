@@ -10,4 +10,6 @@ pub mod connection;
 #[allow(dead_code)]
 pub mod local_client;
 
+pub mod buffer;
+#[allow(dead_code)]
 pub mod record_lock;
