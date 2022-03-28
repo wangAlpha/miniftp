@@ -1,7 +1,7 @@
 use nix::fcntl::flock;
 use nix::fcntl::FlockArg;
 
-struct FileLock {
+pub struct FileLock {
     fd: i32,
 }
 
@@ -17,7 +17,7 @@ impl FileLock {
         };
         flock(self.fd, args).unwrap();
     }
-    fn unlock(&self) {
+    pub fn unlock(&self) {
         flock(self.fd, FlockArg::UnlockNonblock).expect("unlock file failed");
     }
 }

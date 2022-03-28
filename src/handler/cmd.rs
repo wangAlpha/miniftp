@@ -1,17 +1,22 @@
 use super::error::{Error, Result};
-use std::path::Path;
 use std::path::PathBuf;
 use std::str::{self, FromStr};
-use std::result;
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct Answer {
     pub code: ResultCode,
     pub message: String,
 }
 impl Answer {
     pub fn new(code: ResultCode, message: &str) -> Self {
-        Answer { code, message: message.to_string() }
+        Answer {
+            code,
+            message: message.to_string(),
+        }
     }
+    // pub fn from(msg: &mut String) -> Answer {
+    //     // ^[0-9]{2,5}
+    // }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -31,8 +36,9 @@ pub enum Command {
     Stor(PathBuf),
     Syst,
     Type(TransferType),
-    CdUp(String),
     User(String),
+    Unknown(String),
+    CdUp,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -42,12 +48,12 @@ pub enum TransferType {
     Unknown,
 }
 
-impl From<u8> for TransferType{
-    fn from(c: u8) -> TransferType{
+impl From<u8> for TransferType {
+    fn from(c: u8) -> TransferType {
         match c {
-            b'A'=>TransferType::ASCII,
-            b'I'=>TransferType::BINARY,
-            _=>TransferType::Unknown,
+            b'A' => TransferType::ASCII,
+            b'I' => TransferType::BINARY,
+            _ => TransferType::Unknown,
         }
     }
 }
@@ -69,8 +75,9 @@ impl AsRef<str> for Command {
             Command::Stor(_) => "STOR",
             Command::Syst => "SYST",
             Command::Type(_) => "TYPE",
-            Command::CdUp(_) => "CDUP",
+            Command::CdUp => "CDUP",
             Command::User(_) => "USER",
+            Command::Unknown(_) => "UNKN",
         }
     }
 }
@@ -78,34 +85,33 @@ impl AsRef<str> for Command {
 impl Command {
     pub fn new(input: Vec<u8>) -> Result<Self> {
         let mut iter = input.split(|&byte| byte == b' ');
-        let mut command = iter
+        let command = iter
             .next()
             .ok_or_else(|| Error::Msg("empty command".to_string()))
             .unwrap()
             .to_vec();
 
         // to uppercase
-        let command:Vec<u8> = command.iter().map(|&x| {
-            if x >= 'a' as u8 && x <= 'z' as u8 {
-                x -= 32
-            }
-            x
-        }).collect();
+        let command = String::from_utf8_lossy(&command).to_ascii_uppercase();
         let data = iter
             .next()
             .ok_or_else(|| Error::Msg("no command parameter".to_string()));
-        let command = match command.as_slice() {
+        let command = match command.as_bytes() {
             b"AUTH" => Command::Auth,
-            b"CWD" => Command::Cwd(data.and_then(to_path_buf)?),
-            b"LIST" => Command::List(data.and_then(to_path_buf)),
-            b"PASS" => Command::Pass(data.and_then(to_path_buf)),
             b"PASV" => Command::Pasv,
-            b"PORT" => extract_port(data?),
             b"PWD" => Command::Pwd,
             b"QUIT" => Command::Quit,
-            b"RETR" => Command::Retr(data.and_then(to_path_buf)),
-            b"STOR" => Command::Stor(data.and_then(to_path_buf)),
             b"SYST" => Command::Syst,
+            b"CDUP" => Command::CdUp,
+            b"NOOP" => Command::NoOp,
+            b"CWD" => Command::Cwd(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
+            b"PASS" => Command::Pass(String::from_utf8_lossy(data?).to_string()),
+            b"RETR" => Command::Retr(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
+            b"STOR" => Command::Stor(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
+            b"LIST" => Command::List(Some(PathBuf::from(
+                String::from_utf8_lossy(data?).to_string(),
+            ))),
+            b"PORT" => extract_port(data?)?,
             b"TYPE" => {
                 let error = Err("command not implemented for that parameter".into());
                 let data = data?;
@@ -117,29 +123,23 @@ impl Command {
                     typ => Command::Type(typ),
                 }
             }
-            b"USER" => Command::User(
-                data.and_then(|bytes| Ok(Path::new(str::from_utf8(bytes)?).))?,
-            ),
-            b"CDUP" => Command::CdUp,
-            b"MKD" => Command::Mkd(data.and_then(to_path_buf)),
-            b"RMD" => Command::Rmd(
-                data.and_then(|bytes| Ok(Path::new(str::from_utf8(bytes)?).to_path_buf()))?,
-            ),
-            b"NOOP" => Command::NoOp,
+            b"USER" => Command::User(String::from_utf8_lossy(data?).to_string()),
+            b"MKD" => Command::Mkd(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
+            b"RMD" => Command::Rmd(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
             s => Command::Unknown(str::from_utf8(s).unwrap_or("").to_owned()),
         };
         Ok(command)
     }
 }
 
-pub fn to_path_buf(data: &[u8]) -> PathBuf {
-    Path::new(str::from_utf8(data).unwrap()).to_path_buf()
-}
-
-pub fn extract_port(data: &[u8]) -> Command {
+pub fn extract_port(data: &[u8]) -> Result<Command> {
     let addr = data
         .split(|&byte| byte == b',')
-        .filter_map(|bytes| str::from_utf8(|string| u8::from_str(string).ok()))
+        .filter_map(|bytes| {
+            str::from_utf8(bytes)
+                .ok()
+                .and_then(|s| u8::from_str(s).ok())
+        })
         .collect::<Vec<u8>>();
     if addr.len() != 6 {
         return Err("Invalid address/port".into());
@@ -149,10 +149,10 @@ pub fn extract_port(data: &[u8]) -> Command {
     if port <= 1024 {
         return Err("Port can't be less than 1025".into());
     }
-    Command::Port(port)
+    Ok(Command::Port(port))
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ResultCode {
     Series = 100,
     RestartMakerReplay = 110,
@@ -178,7 +178,7 @@ pub enum ResultCode {
     LogoutCmd = 232,
     FileActOk = 250,
     CreatPath = 257,
-    NeedPsk = 331,
+    NeedPsw = 331,
     NeedAccount = 332,
     FileActionPending = 350,
     ServiceNotAvail = 421,

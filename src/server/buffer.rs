@@ -1,4 +1,3 @@
-use nix::sys::uio::IoVec;
 use nix::sys::uio::{readv, writev};
 
 // pub fn read_fd(fd: i32) -> usize {

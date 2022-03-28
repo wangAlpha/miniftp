@@ -1,11 +1,16 @@
 use chrono::Local;
 use env_logger::Builder;
 use log::LevelFilter;
-use miniftp;
+use miniftp::{self, local_client};
 use std::env;
 use std::io::Write;
+
+struct Help {
+    short: &'static str,
+    long: &'static str,
+}
+
 fn main() {
-    miniftp::signal_ignore();
     Builder::new()
         .format(|buf, record| {
             writeln!(
@@ -22,9 +27,9 @@ fn main() {
         .init();
     if let Some(ref opt) = env::args().nth(1) {
         if opt == "-c" {
-            // let mut client = LocalClient;
+            let mut client = local_client::LocalClient::new();
             println!("starting minFTP shell");
-            // client.shell_loop();
+            client.shell_loop();
         } else {
             println!("invalid option {}, only support `-c`", opt);
         }
