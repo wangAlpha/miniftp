@@ -1,8 +1,9 @@
 use super::cmd::*;
-use crate::server::{connection::ConnRef, server::EventLoop};
-use crate::utils::config::Config;
-use nix::sys::socket::SockAddr;
-use std::{path::PathBuf, str::FromStr, sync::Arc};
+use super::codec::{Encoder, FtpCodec};
+use crate::server::connection::ConnRef;
+use crate::server::connection::Connection;
+use crate::server::server::EventLoop;
+use std::{path::PathBuf, sync::Arc};
 
 #[derive(Debug, Clone)]
 enum Mode {
@@ -20,10 +21,10 @@ enum DataType {
 pub struct Session {
     cwd: PathBuf,
     cmd_conn: ConnRef,
-    data_conn: Option<ConnRef>,
-    // data_port: Option<u16>,
-    // data_conn: Option<ConnRef>,
+    data_conn: Option<Arc<Connection>>,
+    data_port: Option<u16>,
     // name: Option<String>,
+    codec: FtpCodec,
     server_root: PathBuf,
     is_admin: bool,
     transfer_type: TransferType,
@@ -35,76 +36,66 @@ impl Session {
     pub fn new(conn: ConnRef, event_loop: EventLoop) -> Self {
         Session {
             cwd: PathBuf::new(),
-            // data_port: None,
-            data_conn: None,
             cmd_conn: conn,
-            server_root: PathBuf::new(),
+            data_conn: None,
+            data_port: Some(8090),
+            codec: FtpCodec,
             // config: Config,
+            server_root: PathBuf::new(),
             is_admin: false,
             transfer_type: TransferType::ASCII,
             waiting_pwd: false,
             event_loop,
         }
     }
-    // pub fn get_context(&self, conn: ConnRef) -> Rc<Context> {
-    //     let fd = conn.lock().unwrap().get_fd();
-    //     self.contexts[&fd]
-    // }
-    pub fn handle_command(&self, msg: Vec<u8>) -> Result<String, Error> {
-        let cmd = Command::new(msg).ok()?;
-
+    pub fn handle_command(&mut self, msg: Vec<u8>) {
+        let cmd = Command::new(msg).ok().unwrap();
         println!("session recevice a msg: {:?}", cmd);
         if self.is_logged() {
             match cmd {
                 Command::Pasv => self.pasv(),
                 Command::Port(port) => {
-                    Some(port)
+                    self.cmd_conn
+                        .lock()
+                        .unwrap()
+                        .send(&format!("OK Data port is now {}", port).as_bytes());
                 }
+                Command::Type(typ) => {
+                    self.transfer_type = typ;
+                    self.cmd_conn
+                        .lock()
+                        .unwrap()
+                        .send(&format!("OK Type: {:?}", typ).as_bytes());
+                }
+                Command::Stor(path) => {
+                    self.stor(path);
+                }
+                _ => (),
             }
+        } else {
+            // PASS
         }
         // match cmd {
-        //     // b"USER" => self.user(),
-        //     Command::Type() => self.user(),
+        //     Command::Auth => println!("Auth"),
+        //     Command::Quit => println!("Quit"),
+        //     Command::NoOp => println!("NoOp"),
+        //     Command::Pasv => println!(),
+        //     Command::Syst => println!(),
+        //     Command::Type(typ) => {
+        //         self.transfer_type = typ;
+        //         self.send_answer(Answer::new(
+        //             ResultCode::Ok,
+        //             "Transfer type changed successfully",
+        //         ));
+        //     }
+        //     Command::User(content) => println!("TODO User"),
+        //     Command::Unknown(s) => {
+        //         self.send_answer(Answer::new(
+        //             ResultCode::SyntaxErr,
+        //             &format!("\"{}\": Not implemented", s),
+        //         ));
+        //     }
         // }
-        // Access control commands
-        //"",
-        //"PASS",
-        //"ACCT",
-        //"CWD",
-        //"CDUP",
-        //"REIN",
-        //"QUIT",
-        // Transfer parameter commands
-        //"PORT",
-        //"PASV",
-        //"TYPE",
-        //"MODE",
-        // Ftp service commands
-        //"RETR",
-        //"STOR",
-        //"STOU",
-        //"APPE",
-        //"ALLO",
-        //"REST",
-        //"RNFR",
-        //"RNTO",
-        //"ABOR",
-        //"DELE",
-        //"RMD",
-        //"MKD",
-        //"PWD",
-        //"LIST",
-        //"NLST",
-        //"SITE",
-        //"SYST",
-        //"STAT",
-        //"HELP",
-        //"NOOP",
-        // Modern FTP Commands
-        //"FEAT",
-        //"OPTS",
-        //"SIZE",
-        Ok(String::from_str("aaaaa"))
     }
     fn is_logged(&self) -> bool {
         true
@@ -120,21 +111,41 @@ impl Session {
     fn cwd(&mut self, path: Option<PathBuf>) {}
     fn list(&mut self, path: Option<PathBuf>) {}
     fn pasv(&mut self) {
-        // let (fd, listener) = Connection::bind("0.0.0.0:8090");
-
-        // event_loop_clone.register(
-        //     listener,
-        //     EpollFlags::EPOLLHUP
-        //         | EpollFlags::EPOLLERR
-        //         | EpollFlags::EPOLLIN
-        //         | EpollFlags::EPOLLOUT
-        //         | EpollFlags::EPOLLET,
-        // );
+        let port = if let Some(port) = self.data_port {
+            port
+        } else {
+            // let mut addr = self.cmd_conn.lock().unwrap().get_peer_address();
+            22
+        };
+        let (fd, listener) = Connection::bind(format!("0.0.0.0:{}", port).as_str());
+        self.event_loop.register_listen(listener);
+        println!("register pasv port: {}", port);
     }
     fn quit(&mut self) {}
     fn retr(&mut self, path: PathBuf) {}
-    fn stor(&mut self, path: PathBuf) {}
-    fn send(&mut self) {}
+    fn stor(&mut self, path: PathBuf) {
+        if let Some(conn) = &self.data_conn {
+            // check file path and admin
+            let path = self.cwd.join(path);
+        } else {
+            self.send_answer(Answer::new(
+                ResultCode::DataConnFail,
+                "No opened data connection",
+            ));
+        }
+    }
+    // TODO
+    fn send_answer(&mut self, answer: Answer) {
+        self.cmd_conn
+            .lock()
+            .unwrap()
+            .send(format!("{:?}", answer).as_bytes());
+        // let mut bytes = BytesMut::new();
+        // self.codec.encode(answer, &mut bytes);
+        // let a = "".as_bytes();
+        // answer.as_bytes()
+        // bytes.
+    }
     // fn receive_data(&mut self) {}
 }
 

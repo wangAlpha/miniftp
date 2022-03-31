@@ -2,7 +2,11 @@ use super::cmd::{Answer, Command};
 use super::error::Error;
 use bytes::BytesMut;
 use std::io::{self, Write};
+
+#[derive(Debug, Clone, Copy)]
 pub struct BytesCodec;
+
+#[derive(Debug, Clone, Copy)]
 pub struct FtpCodec;
 
 pub trait Decoder {

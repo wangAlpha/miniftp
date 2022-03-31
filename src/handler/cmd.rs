@@ -14,6 +14,11 @@ impl Answer {
             message: message.to_string(),
         }
     }
+    // pub fn as_bytes(&self) -> &[u8] {
+    //     let s = String::new();
+    //     let bytes = s.as_bytes
+    //     // format!("{} \r\n")
+    // }
     // pub fn from(msg: &mut String) -> Answer {
     //     // ^[0-9]{2,5}
     // }
@@ -31,17 +36,17 @@ pub enum Command {
     Pasv,
     Pwd,
     Quit,
+    Syst,
+    CdUp,
     Retr(PathBuf),
     Rmd(PathBuf),
     Stor(PathBuf),
-    Syst,
     Type(TransferType),
     User(String),
     Unknown(String),
-    CdUp,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TransferType {
     ASCII,
     BINARY,

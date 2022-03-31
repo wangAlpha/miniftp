@@ -15,12 +15,11 @@ use nix::libc::exit;
 use nix::sys::epoll::{EpollEvent, EpollFlags, EpollOp};
 use nix::sys::resource::*;
 use nix::sys::signal::pthread_sigmask;
+use nix::sys::signal::signal;
 use nix::sys::signal::{SigHandler, SigSet, SigmaskHow, Signal};
 use nix::sys::stat::umask;
 use nix::sys::stat::Mode;
-use nix::sys::{signal::signal, socket::shutdown};
 use nix::unistd::chdir;
-use nix::unistd::dup;
 use nix::unistd::ftruncate;
 use nix::unistd::{fork, getpid, setsid, write};
 use num_cpus;
@@ -112,6 +111,16 @@ impl EventLoop {
         self.data_listener.lock().unwrap().insert(fd, listener);
         self.poller.register(fd, interest);
     }
+    pub fn register_listen(&mut self, listener: TcpListener) {
+        self.register(
+            listener,
+            EpollFlags::EPOLLHUP
+                | EpollFlags::EPOLLERR
+                | EpollFlags::EPOLLIN
+                | EpollFlags::EPOLLOUT
+                | EpollFlags::EPOLLET,
+        );
+    }
     pub fn reregister(&self, fd: i32, interest: EpollFlags) {
         let event = EpollEvent::new(interest, fd as u64);
         self.poller
@@ -162,17 +171,18 @@ impl FtpServer {
         let sessions = Arc::new(Mutex::new(HashMap::<i32, Session>::new()));
         for _ in 0..num_cpus::get() {
             let q_clone = q.clone();
-            let mut event_loop_clone = event_loop.clone();
-            let mut sessions = sessions.clone();
+            let event_loop_clone = event_loop.clone();
+            let sessions = sessions.clone();
             pool.execute(move || loop {
                 let (conn, msg) = q_clone.pop_front();
                 // 判断是否是数据连接
                 let fd = conn.lock().unwrap().get_fd();
-                let sessions = sessions.lock().unwrap();
+                let mut sessions = sessions.lock().unwrap();
                 if !sessions.contains_key(&fd) {
-                    sessions.insert(fd, Session::new(conn, event_loop_clone));
+                    let s = Session::new(conn, event_loop_clone.clone());
+                    sessions.insert(fd, s);
                 }
-                let reply = sessions.get(&fd).unwrap().handle_command(msg);
+                sessions.get_mut(&fd).unwrap().handle_command(msg);
 
                 debug!("register a new listener: {:?}", fd);
             });

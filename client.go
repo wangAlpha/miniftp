@@ -5,6 +5,7 @@ import (
 	"net"
 	"sync"
 	"time"
+	"os"
 )
 
 const (
@@ -14,8 +15,12 @@ const (
 func main() {
 	var wg sync.WaitGroup
 	wg.Add(1)
+	port := os.Args[1]
+	// println("addr %s", addr)
+	addr := fmt.Sprintf("127.0.0.1:%s", port)
+	println(addr)
 	for i := 0; i < MAX_CONN; i++ {
-		go Conn("127.0.0.1:8089", i)
+		go Conn(addr, i)
 		time.Sleep(time.Millisecond * 100)
 	}
 	wg.Wait()

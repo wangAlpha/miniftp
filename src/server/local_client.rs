@@ -1,16 +1,15 @@
 use crate::handler::cmd::{Answer, ResultCode};
-use crate::utils::config::{self, Config};
-use nix::sys::socket::Shutdown;
-use nix::sys::socket::{self, connect, shutdown, socket, SockFlag};
-use nix::sys::socket::{AddressFamily, InetAddr, SockAddr};
-use nix::sys::socket::{SockProtocol, SockType};
+use nix::sys::socket::{self, connect, shutdown, socket, sockopt, Shutdown, SockFlag};
+use nix::sys::socket::{accept4, listen, setsockopt};
+use nix::sys::socket::{AddressFamily, InetAddr, SockAddr, SockProtocol, SockType};
 use nix::unistd::{read, write};
-use std::io;
-use std::io::Write;
-use std::io::{stdin, Read};
+use std::io::{self, stdin, Read, Write};
 use std::net::SocketAddr;
-use std::net::TcpStream;
+use std::net::TcpListener;
+use std::os::unix::prelude::AsRawFd;
 use std::str::FromStr;
+
+use super::connection::Connection;
 
 #[derive(Debug)]
 pub struct LocalClient {
@@ -18,6 +17,7 @@ pub struct LocalClient {
     port: u16,
     conn_fd: i32,
     connected: bool,
+    data_conn: Option<Connection>,
 }
 
 impl LocalClient {
@@ -25,23 +25,25 @@ impl LocalClient {
         let sockfd = socket(
             AddressFamily::Inet,
             SockType::Stream,
-            SockFlag::SOCK_CLOEXEC, // | SockFlag::SOCK_NONBLOCK,
+            SockFlag::SOCK_CLOEXEC,
             SockProtocol::Tcp,
         )
         .unwrap();
         LocalClient {
             hostname: String::new(),
-            port: 21,
+            port: 8089,
             conn_fd: sockfd,
             connected: false,
+            data_conn: None,
         }
     }
     pub fn shell_loop(&mut self) {
-        let config = Config::from_cwd_config();
+        // let config = Config::from_cwd_config();
         let mut line = String::new();
 
         loop {
             print!("FTP> ");
+            io::stdout().flush().unwrap();
             match stdin().read_line(&mut line) {
                 Ok(n) => {
                     line.pop();
@@ -68,6 +70,11 @@ impl LocalClient {
         match cmd.as_bytes() {
             b"OPEN" => self.open(args),
             b"USER" => self.user(),
+            b"PASV" => {
+                let s = self.send_cmd(String::from_str("PASV").unwrap());
+                println!("{}", s);
+            }
+            b"PORT" => self.port(),
             b"CLOSE" => self.close(),
             b"CD" => self.cd(),
             b"LS" => self.list(),
@@ -125,7 +132,7 @@ impl LocalClient {
     }
     fn login(&mut self, username: String, password: String) {
         if self.is_open() {}
-        let mut reply = self.send_cmd(format!("USER {}", username));
+        let reply = self.send_cmd(format!("USER {}", username));
         println!("reply: {}", reply);
         // if reply.code == ResultCode::NeedPsw {
         //     println!("{:?}", self.send_cmd(format!("PASS {}", password)));
@@ -162,9 +169,21 @@ impl LocalClient {
     //         message:
     //     }
     // }
-    fn port(&self) {
-        self.send_cmd(String::from("PORT 127,0,0,1,12\r\n"));
+    fn port(&mut self) {
+        // TODO: check status code
+        if let Some(c) = self.data_conn.clone() {
+            c.shutdown();
+            self.data_conn = None;
+        }
+        // TODO file configure
+        self.send_cmd(String::from("PORT 127,0,0,1,31,154\r\n"));
+        let addr = format!("{}:{}", "127.0.0.1", 8090);
+        let listener = TcpListener::bind(addr.as_str()).unwrap();
+        let fd = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC).unwrap();
+        setsockopt(fd, sockopt::TcpNoDelay, &true).unwrap();
+        self.data_conn = Some(Connection::new(fd));
     }
+
     fn cd(&mut self) {}
     fn put(&mut self) {}
     fn upload(&mut self) {}

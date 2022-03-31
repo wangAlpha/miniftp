@@ -1,6 +1,6 @@
 use log::{debug, info, warn};
 use nix::sys::epoll::EpollFlags;
-use nix::sys::socket::getsockname;
+use nix::sys::socket::getpeername;
 use nix::sys::socket::shutdown;
 use nix::sys::socket::Shutdown;
 use nix::sys::socket::{accept4, setsockopt, sockopt};
@@ -12,7 +12,6 @@ use std::sync::{Arc, Mutex};
 
 use super::server::EventLoop;
 pub type ConnRef = Arc<Mutex<Connection>>;
-
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub enum State {
     Reading,
@@ -117,6 +116,9 @@ impl Connection {
         event_loop.deregister(self.fd);
         shutdown(self.fd, Shutdown::Both).unwrap();
     }
+    pub fn shutdown(&self) {
+        shutdown(self.fd, Shutdown::Both).unwrap();
+    }
     pub fn send(&mut self, buf: &[u8]) {
         write(self.fd, buf).unwrap();
     }
@@ -129,7 +131,8 @@ impl Connection {
         // write(self.fd, &data).unwrap();
     }
     pub fn get_peer_address(&self) -> SockAddr {
-        getsockname(self.fd).expect("get peer socket address failed")
+        let addr = getpeername(self.fd).expect("get peer socket address failed");
+        addr
     }
     pub fn read(&mut self) {
         let mut buf = [0u8; 1024];
