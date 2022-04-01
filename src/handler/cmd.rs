@@ -1,4 +1,5 @@
 use super::error::{Error, Result};
+use log::{debug, info};
 use std::path::PathBuf;
 use std::str::{self, FromStr};
 
@@ -95,12 +96,14 @@ impl Command {
             .ok_or_else(|| Error::Msg("empty command".to_string()))
             .unwrap()
             .to_vec();
-
+        // 先移除\r\
+        debug!("command: {}", String::from_utf8(command.clone()).unwrap());
         // to uppercase
         let command = String::from_utf8_lossy(&command).to_ascii_uppercase();
         let data = iter
             .next()
             .ok_or_else(|| Error::Msg("no command parameter".to_string()));
+        // let d = String::from_utf8_lossy(data?).to_string();
         let command = match command.as_bytes() {
             b"AUTH" => Command::Auth,
             b"PASV" => Command::Pasv,
@@ -116,7 +119,7 @@ impl Command {
             b"LIST" => Command::List(Some(PathBuf::from(
                 String::from_utf8_lossy(data?).to_string(),
             ))),
-            b"PORT" => extract_port(data?)?,
+            b"PORT" => extract_port(data?).unwrap(),
             b"TYPE" => {
                 let error = Err("command not implemented for that parameter".into());
                 let data = data?;
@@ -138,6 +141,7 @@ impl Command {
 }
 
 pub fn extract_port(data: &[u8]) -> Result<Command> {
+    debug!("data: {}", String::from_utf8_lossy(data));
     let addr = data
         .split(|&byte| byte == b',')
         .filter_map(|bytes| {
@@ -146,6 +150,7 @@ pub fn extract_port(data: &[u8]) -> Result<Command> {
                 .and_then(|s| u8::from_str(s).ok())
         })
         .collect::<Vec<u8>>();
+    // debug!("addr: {}", String::from_utf8(addr).unwrap());
     if addr.len() != 6 {
         return Err("Invalid address/port".into());
     }

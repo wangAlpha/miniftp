@@ -1,28 +1,19 @@
 use super::connection::{ConnRef, Connection, State};
 use super::poller::Poller;
 use super::queue::{BlockingQueue, BlockingQueueRef};
-use crate::handler::{
-    codec::{Decoder, FtpCodec},
-    session::{self, Session},
-};
+use crate::handler::session::{self, Session};
 use crate::threadpool::threadpool::ThreadPool;
-use log::{debug, error, info, warn};
-use nix::fcntl::flock;
-use nix::fcntl::open;
-use nix::fcntl::FlockArg;
-use nix::fcntl::OFlag;
+use log::debug;
+use nix::fcntl::{flock, open, FlockArg, OFlag};
 use nix::libc::exit;
 use nix::sys::epoll::{EpollEvent, EpollFlags, EpollOp};
 use nix::sys::resource::*;
-use nix::sys::signal::pthread_sigmask;
-use nix::sys::signal::signal;
+use nix::sys::signal::{pthread_sigmask, signal};
 use nix::sys::signal::{SigHandler, SigSet, SigmaskHow, Signal};
-use nix::sys::stat::umask;
-use nix::sys::stat::Mode;
-use nix::unistd::chdir;
-use nix::unistd::ftruncate;
-use nix::unistd::{fork, getpid, setsid, write};
+use nix::sys::stat::{umask, Mode};
+use nix::unistd::{chdir, fork, ftruncate, getpid, setsid, write};
 use num_cpus;
+use std::collections::HashSet;
 use std::net::TcpListener;
 use std::os::unix::prelude::AsRawFd;
 use std::sync::Arc;
@@ -36,11 +27,23 @@ pub const EVENT_HUP: EpollFlags = EpollFlags::EPOLLHUP;
 
 const LOCK_FILE: &str = "/var/run/miniftp.pid";
 
+// fd, and listen fd
+#[derive(Debug, Clone, Copy)]
+pub enum ConTyp {
+    Cmd,
+    Data,
+}
+#[derive(Debug, Clone, Copy)]
+pub enum Token {
+    Listen(i32),
+    Read(i32),
+}
+
 pub trait Handler: Sized {
     type Timeout;
     type Message;
-    fn ready(&mut self, event_loop: &mut EventLoop, fd: i32, revent: EpollFlags);
-    fn notify(&mut self, event_loop: &mut EventLoop, fd: i32, revent: EpollFlags);
+    fn ready(&mut self, event_loop: &mut EventLoop, token: Token, revent: EpollFlags);
+    fn notify(&mut self, event_loop: &mut EventLoop, token: Token, revent: EpollFlags);
 }
 
 pub fn daemonize() {
@@ -86,6 +89,7 @@ pub fn already_runing() -> bool {
 pub struct EventLoop {
     listener: Arc<TcpListener>,
     data_listener: Arc<Mutex<HashMap<i32, TcpListener>>>,
+    data_conn: Arc<Mutex<HashSet<i32>>>,
     poller: Poller,
     run: bool,
 }
@@ -104,12 +108,16 @@ impl EventLoop {
             data_listener: Arc::new(Mutex::new(HashMap::new())),
             run: true,
             poller,
+            data_conn: Arc::new(Mutex::new(HashSet::new())),
         }
     }
     pub fn register(&mut self, listener: TcpListener, interest: EpollFlags) {
         let fd = listener.as_raw_fd();
         self.data_listener.lock().unwrap().insert(fd, listener);
         self.poller.register(fd, interest);
+    }
+    pub fn is_data_conn(&self, fd: i32) -> bool {
+        self.data_listener.lock().unwrap().contains_key(&fd)
     }
     pub fn register_listen(&mut self, listener: TcpListener) {
         self.register(
@@ -132,9 +140,6 @@ impl EventLoop {
     pub fn is_new_conn(&self, fd: i32) -> bool {
         self.listener.as_raw_fd() == fd || self.data_listener.lock().unwrap().contains_key(&fd)
     }
-    pub fn is_data_conn(&self, fd: i32) -> bool {
-        self.data_listener.lock().unwrap().contains_key(&fd)
-    }
     pub fn run<H>(&mut self, handler: &mut H)
     where
         H: Handler,
@@ -144,13 +149,20 @@ impl EventLoop {
             // io ready event: connection
             for i in 0..cnt {
                 let (fd, event) = self.poller.event(i);
-                handler.ready(self, fd, event.events());
+                let token = if fd == self.listener.as_raw_fd() {
+                    Token::Listen(fd)
+                } else if self.data_listener.lock().unwrap().contains_key(&fd) {
+                    Token::Listen(fd)
+                } else {
+                    Token::Read(fd)
+                };
+                handler.ready(self, token, event.events());
             }
             // io read and write event
-            for i in 0..cnt {
-                let (fd, event) = self.poller.event(i);
-                handler.notify(self, fd, event.events());
-            }
+            // for i in 0..cnt {
+            //     let (fd, event) = self.poller.event(i);
+            //     handler.notify(self, token, event.events());
+            // }
         }
     }
 }
@@ -161,37 +173,54 @@ pub struct FtpServer {
     conn_list: HashMap<i32, ConnRef>,
     request_queue: TaskQueueRef,
     worker_pool: ThreadPool,
-    sessions: Arc<Mutex<HashMap<i32, Session>>>,
+    sessions: Arc<RwLock<HashMap<i32, Session>>>,
 }
 
 impl FtpServer {
     pub fn new(event_loop: &mut EventLoop) -> Self {
         let q: TaskQueueRef = BlockingQueueRef::new(BlockingQueue::new(64));
         let pool = ThreadPool::new(num_cpus::get());
-        let sessions = Arc::new(Mutex::new(HashMap::<i32, Session>::new()));
+        let sessions = Arc::new(RwLock::new(HashMap::<i32, Session>::new()));
+        let data_listen_map = Arc::new(Mutex::new(HashMap::<i32, i32>::new()));
         for _ in 0..num_cpus::get() {
             let q_clone = q.clone();
-            let event_loop_clone = event_loop.clone();
+            let event_loop = event_loop.clone();
             let sessions = sessions.clone();
+            let mut conn_map = data_listen_map.clone();
             pool.execute(move || loop {
                 let (conn, msg) = q_clone.pop_front();
-                // 判断是否是数据连接
                 let fd = conn.lock().unwrap().get_fd();
-                let mut sessions = sessions.lock().unwrap();
-                if !sessions.contains_key(&fd) {
-                    let s = Session::new(conn, event_loop_clone.clone());
-                    sessions.insert(fd, s);
-                }
-                sessions.get_mut(&fd).unwrap().handle_command(msg);
+                if conn_map.lock().unwrap().contains_key(&fd) {
+                    let data_fd = conn.lock().unwrap().get_fd();
+                    let cmd_fd = conn_map.lock().unwrap()[&data_fd];
 
-                debug!("register a new listener: {:?}", fd);
+                    let c = conn.lock().unwrap().clone();
+                    sessions
+                        .write()
+                        .unwrap()
+                        .get_mut(&cmd_fd)
+                        .unwrap()
+                        .receive_data(msg, c);
+                } else {
+                    let cmd_fd = fd;
+                    if !sessions.read().unwrap().contains_key(&cmd_fd) {
+                        let s = Session::new(conn, event_loop.clone());
+                        sessions.write().unwrap().insert(cmd_fd, s);
+                    }
+                    sessions
+                        .write()
+                        .unwrap()
+                        .get_mut(&cmd_fd)
+                        .unwrap()
+                        .handle_command(msg, &mut conn_map);
+                }
             });
         }
         FtpServer {
             conn_list: HashMap::new(),
             request_queue: q,
             worker_pool: pool,
-            sessions: sessions,
+            sessions,
         }
     }
 }
@@ -199,39 +228,34 @@ impl FtpServer {
 impl Handler for FtpServer {
     type Message = String;
     type Timeout = i32;
-    fn ready(&mut self, event_loop: &mut EventLoop, token: i32, revents: EpollFlags) {
-        debug!("a new event token: {}", token);
-        if event_loop.is_new_conn(token) {
-            // assert_ne!((revents & EVENT_READ).bits(), 0);
-            let (fd, mut conn) = Connection::accept(token, event_loop);
-            conn.register_read(event_loop);
-            if !event_loop.is_data_conn(fd) {
-                debug!("register a new cmd connection: {}", fd);
-            } else {
-                debug!("register a new data connection: {}", fd);
-                event_loop.deregister(token);
+    fn ready(&mut self, event_loop: &mut EventLoop, token: Token, revents: EpollFlags) {
+        debug!("a new event token: {:?}", token);
+        match token {
+            Token::Listen(listen_fd) => {
+                let mut conn = Connection::accept(listen_fd);
+                let fd = conn.get_fd();
+                conn.register_read(event_loop);
+                self.conn_list.insert(fd, Arc::new(Mutex::new(conn)));
             }
-            debug!("connection address: {:?}", conn.get_peer_address());
-            self.conn_list.insert(fd, Arc::new(Mutex::new(conn)));
-        } else {
-            self.conn_list[&token]
-                .lock()
-                .unwrap()
-                .dispatch(event_loop, revents);
-            let clone = self.conn_list[&token].clone();
-            let msg = self.conn_list[&token].lock().unwrap().get_msg();
-            self.request_queue.push_back((clone, msg));
-            if self.conn_list[&token].lock().unwrap().get_state() == State::Closed {
-                self.conn_list[&token]
-                    .lock()
-                    .unwrap()
-                    .deregister(event_loop);
-                self.conn_list.remove(&token);
-                debug!("disconnection fd: {}", token);
+            Token::Read(fd) => {
+                self.conn_list
+                    .entry(fd)
+                    .or_insert(Arc::new(Mutex::new(Connection::new(fd))));
+                let state = self.conn_list[&fd].lock().unwrap().dispatch(revents);
+                if state == State::Finished {
+                    let msg = self.conn_list[&fd].lock().unwrap().get_msg();
+                    let clone = self.conn_list[&fd].clone();
+                    self.request_queue.push_back((clone, msg));
+                }
+                if state == State::Closed {
+                    self.conn_list[&fd].lock().unwrap().deregister(event_loop);
+                    self.conn_list.remove(&fd);
+                    debug!("disconnection fd: {}", fd);
+                }
             }
         }
     }
-    fn notify(&mut self, event_loop: &mut EventLoop, fd: i32, revents: EpollFlags) {}
+    fn notify(&mut self, event_loop: &mut EventLoop, token: Token, revents: EpollFlags) {}
 }
 
 pub fn run_server() {

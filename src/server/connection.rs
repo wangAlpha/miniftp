@@ -1,16 +1,15 @@
 use log::{debug, info, warn};
 use nix::sys::epoll::EpollFlags;
-use nix::sys::socket::getpeername;
-use nix::sys::socket::shutdown;
-use nix::sys::socket::Shutdown;
-use nix::sys::socket::{accept4, setsockopt, sockopt};
-use nix::sys::socket::{SockAddr, SockFlag};
+use nix::sys::socket::{accept4, connect, setsockopt, sockopt};
+use nix::sys::socket::{getpeername, shutdown, socket, Shutdown};
+use nix::sys::socket::{AddressFamily, InetAddr, SockAddr, SockFlag, SockProtocol, SockType};
 use nix::unistd::{read, write};
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpListener};
 use std::os::unix::prelude::AsRawFd;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
-use super::server::EventLoop;
+use super::server::{ConTyp, EventLoop, Token};
 pub type ConnRef = Arc<Mutex<Connection>>;
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub enum State {
@@ -20,6 +19,7 @@ pub enum State {
     Finished,
     Closed,
 }
+
 const READABLE: u8 = 0b0001;
 const WRITABLE: u8 = 0b0010;
 
@@ -53,8 +53,6 @@ pub struct Connection {
     state: State,
     write_buf: Vec<u8>,
     read_buf: Vec<u8>,
-    event_loop: Arc<Option<EventLoop>>,
-    event_addd: bool,
 }
 
 impl Connection {
@@ -64,20 +62,39 @@ impl Connection {
             state: State::Ready,
             write_buf: Vec::new(),
             read_buf: Vec::new(),
-            event_loop: Arc::new(None),
-            event_addd: false,
         }
     }
     pub fn bind(addr: &str) -> (i32, TcpListener) {
         let listener = TcpListener::bind(addr).unwrap();
         (listener.as_raw_fd(), listener)
     }
-    pub fn accept(listen_fd: i32, event_loop: &mut EventLoop) -> (i32, Self) {
+    pub fn connect(addr: &str) -> Connection {
+        let sockfd = socket(
+            AddressFamily::Inet,
+            SockType::Stream,
+            SockFlag::SOCK_CLOEXEC,
+            SockProtocol::Tcp,
+        )
+        .unwrap();
+
+        let addr = SocketAddr::from_str(addr).unwrap();
+        let inet_addr = InetAddr::from_std(&addr);
+        let sock_addr = SockAddr::new_inet(inet_addr);
+
+        match connect(sockfd, &sock_addr) {
+            Ok(()) => println!("Connection success!"),
+            Err(e) => println!("Connection failed: {}", e),
+        }
+        return Connection::new(sockfd);
+    }
+    pub fn accept(listen_fd: i32) -> Self {
         let fd = accept4(listen_fd, SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK).unwrap();
         setsockopt(fd, sockopt::TcpNoDelay, &true).unwrap();
-        (fd, Connection::new(fd))
+        let mut c = Connection::new(fd);
+        c
     }
-    pub fn dispatch(&mut self, event_loop: &mut EventLoop, revents: EpollFlags) {
+
+    pub fn dispatch(&mut self, revents: EpollFlags) -> State {
         debug!("connection {} state: {:?}", self.fd, self.state);
         if revents.is_readable() {
             self.read();
@@ -86,11 +103,12 @@ impl Connection {
             self.write();
         }
         if revents.is_error() {
-            self.state = State::Closed;
+            // self.state = State::Closed;
         }
         if revents.is_close() {
             self.state = State::Closed;
         }
+        return self.state;
     }
     pub fn get_fd(&self) -> i32 {
         self.fd
@@ -99,7 +117,10 @@ impl Connection {
         self.state
     }
     pub fn get_msg(&mut self) -> Vec<u8> {
-        self.read_buf.to_owned()
+        self.state = State::Reading;
+        let buf = self.read_buf.to_owned();
+        self.read_buf.clear();
+        buf
     }
     pub fn register_read(&mut self, event_loop: &mut EventLoop) {
         self.read_buf.clear();

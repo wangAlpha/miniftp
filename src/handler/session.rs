@@ -1,9 +1,15 @@
+use nix::sys::socket::{accept4, SockFlag};
+
 use super::cmd::*;
 use super::codec::{Encoder, FtpCodec};
 use crate::server::connection::ConnRef;
 use crate::server::connection::Connection;
 use crate::server::server::EventLoop;
-use std::{path::PathBuf, sync::Arc};
+use std::collections::HashMap;
+use std::net::TcpListener;
+use std::os::unix::prelude::AsRawFd;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone)]
 enum Mode {
@@ -38,7 +44,7 @@ impl Session {
             cwd: PathBuf::new(),
             cmd_conn: conn,
             data_conn: None,
-            data_port: Some(8090),
+            data_port: Some(2222),
             codec: FtpCodec,
             // config: Config,
             server_root: PathBuf::new(),
@@ -48,17 +54,29 @@ impl Session {
             event_loop,
         }
     }
-    pub fn handle_command(&mut self, msg: Vec<u8>) {
-        let cmd = Command::new(msg).ok().unwrap();
-        println!("session recevice a msg: {:?}", cmd);
+    pub fn handle_command(&mut self, msg: Vec<u8>, conn_map: &mut Arc<Mutex<HashMap<i32, i32>>>) {
+        println!(
+            "handle command: {}",
+            String::from_utf8(msg.clone()).unwrap()
+        );
+        let cmd = Command::new(msg).unwrap();
         if self.is_logged() {
             match cmd {
-                Command::Pasv => self.pasv(),
+                Command::Pasv => self.pasv(conn_map),
                 Command::Port(port) => {
+                    self.data_port = Some(port);
                     self.cmd_conn
                         .lock()
                         .unwrap()
                         .send(&format!("OK Data port is now {}", port).as_bytes());
+                    let addr = format!("127.0.0.1:{}", port);
+                    let mut c = Connection::connect(addr.as_str());
+
+                    let cmd_fd = self.cmd_conn.lock().unwrap().get_fd();
+                    let data_fd = c.get_fd();
+                    c.register_read(&mut self.event_loop);
+                    self.data_conn = Some(Arc::new(c));
+                    conn_map.lock().unwrap().insert(cmd_fd, data_fd);
                 }
                 Command::Type(typ) => {
                     self.transfer_type = typ;
@@ -100,9 +118,6 @@ impl Session {
     fn is_logged(&self) -> bool {
         true
     }
-    fn port(&self) -> bool {
-        false
-    }
     fn deregister_conn(&mut self) {}
     fn complete_path(&self, path: PathBuf) {}
     fn mkd(&mut self, path: PathBuf) {}
@@ -110,16 +125,29 @@ impl Session {
     fn strip_prefix(&self, dir: PathBuf) {}
     fn cwd(&mut self, path: Option<PathBuf>) {}
     fn list(&mut self, path: Option<PathBuf>) {}
-    fn pasv(&mut self) {
+    fn pasv(&mut self, conn_map: &mut Arc<Mutex<HashMap<i32, i32>>>) {
         let port = if let Some(port) = self.data_port {
             port
         } else {
             // let mut addr = self.cmd_conn.lock().unwrap().get_peer_address();
             22
         };
-        let (fd, listener) = Connection::bind(format!("0.0.0.0:{}", port).as_str());
-        self.event_loop.register_listen(listener);
-        println!("register pasv port: {}", port);
+        if self.data_conn.is_some() {
+            self.send_answer(Answer::new(
+                ResultCode::DataConnOpened,
+                "Already listening...",
+            ));
+            return;
+        }
+
+        let addr = format!("0.0.0.0:{}", port);
+        let listener = TcpListener::bind(addr).unwrap();
+        let mut c = Connection::accept(listener.as_raw_fd());
+        c.register_read(&mut self.event_loop);
+        self.data_conn = Some(Arc::new(c));
+        let cmd_fd = self.cmd_conn.lock().unwrap().get_fd();
+        let data_fd = self.data_conn.as_ref().unwrap().get_fd();
+        conn_map.lock().unwrap().insert(cmd_fd, data_fd);
     }
     fn quit(&mut self) {}
     fn retr(&mut self, path: PathBuf) {}
@@ -134,19 +162,17 @@ impl Session {
             ));
         }
     }
-    // TODO
+    pub fn receive_data(&mut self, msg: Vec<u8>, conn: Connection) {
+        if self.data_conn.is_none() {
+            self.data_conn = Some(Arc::new(conn));
+        }
+        println!("receive data");
+    }
+    // TODO code
     fn send_answer(&mut self, answer: Answer) {
         self.cmd_conn
             .lock()
             .unwrap()
             .send(format!("{:?}", answer).as_bytes());
-        // let mut bytes = BytesMut::new();
-        // self.codec.encode(answer, &mut bytes);
-        // let a = "".as_bytes();
-        // answer.as_bytes()
-        // bytes.
     }
-    // fn receive_data(&mut self) {}
 }
-
-fn file_info(path: PathBuf, out: &mut Vec<u8>) {}
