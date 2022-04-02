@@ -16,8 +16,7 @@ use num_cpus;
 use std::collections::HashSet;
 use std::net::TcpListener;
 use std::os::unix::prelude::AsRawFd;
-use std::sync::Arc;
-use std::sync::{Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::{collections::HashMap, fmt::Debug};
 
 pub const EVENT_LEVEL: EpollFlags = EpollFlags::EPOLLET;
@@ -173,14 +172,14 @@ pub struct FtpServer {
     conn_list: HashMap<i32, ConnRef>,
     request_queue: TaskQueueRef,
     worker_pool: ThreadPool,
-    sessions: Arc<RwLock<HashMap<i32, Session>>>,
+    sessions: Arc<Mutex<HashMap<i32, Session>>>,
 }
 
 impl FtpServer {
     pub fn new(event_loop: &mut EventLoop) -> Self {
         let q: TaskQueueRef = BlockingQueueRef::new(BlockingQueue::new(64));
         let pool = ThreadPool::new(num_cpus::get());
-        let sessions = Arc::new(RwLock::new(HashMap::<i32, Session>::new()));
+        let sessions = Arc::new(Mutex::new(HashMap::<i32, Session>::new()));
         let data_listen_map = Arc::new(Mutex::new(HashMap::<i32, i32>::new()));
         for _ in 0..num_cpus::get() {
             let q_clone = q.clone();
@@ -190,25 +189,25 @@ impl FtpServer {
             pool.execute(move || loop {
                 let (conn, msg) = q_clone.pop_front();
                 let fd = conn.lock().unwrap().get_fd();
+                println!("conn_map: {:?}, fd: {}", conn_map, fd);
                 if conn_map.lock().unwrap().contains_key(&fd) {
                     let data_fd = conn.lock().unwrap().get_fd();
                     let cmd_fd = conn_map.lock().unwrap()[&data_fd];
-
-                    let c = conn.lock().unwrap().clone();
+                    let c = conn.clone();
                     sessions
-                        .write()
+                        .lock()
                         .unwrap()
                         .get_mut(&cmd_fd)
                         .unwrap()
-                        .receive_data(msg, c);
+                        .receive_data(msg, &c);
                 } else {
                     let cmd_fd = fd;
-                    if !sessions.read().unwrap().contains_key(&cmd_fd) {
+                    if !sessions.lock().unwrap().contains_key(&cmd_fd) {
                         let s = Session::new(conn, event_loop.clone());
-                        sessions.write().unwrap().insert(cmd_fd, s);
+                        sessions.lock().unwrap().insert(cmd_fd, s);
                     }
                     sessions
-                        .write()
+                        .lock()
                         .unwrap()
                         .get_mut(&cmd_fd)
                         .unwrap()
@@ -241,16 +240,20 @@ impl Handler for FtpServer {
                 self.conn_list
                     .entry(fd)
                     .or_insert(Arc::new(Mutex::new(Connection::new(fd))));
+                // ugly clone
                 let state = self.conn_list[&fd].lock().unwrap().dispatch(revents);
-                if state == State::Finished {
+                debug!("state: {:?}", state);
+                if state == State::Finished || state == State::Closed {
                     let msg = self.conn_list[&fd].lock().unwrap().get_msg();
-                    let clone = self.conn_list[&fd].clone();
-                    self.request_queue.push_back((clone, msg));
-                }
-                if state == State::Closed {
-                    self.conn_list[&fd].lock().unwrap().deregister(event_loop);
-                    self.conn_list.remove(&fd);
-                    debug!("disconnection fd: {}", fd);
+                    if !msg.is_empty() {
+                        let clone = self.conn_list[&fd].clone();
+                        self.request_queue.push_back((clone, msg));
+                    }
+                    if state == State::Closed {
+                        self.conn_list[&fd].lock().unwrap().deregister(event_loop);
+                        self.conn_list.remove(&fd);
+                        debug!("disconnection fd: {}", fd);
+                    }
                 }
             }
         }

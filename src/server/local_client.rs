@@ -1,13 +1,17 @@
 use super::connection::Connection;
-use crate::handler::cmd::{Answer, ResultCode};
+use crate::{
+    handler::cmd::{Answer, ResultCode},
+    server::record_lock::FileLock,
+};
+use log::{debug, info, warn};
 use nix::fcntl::{self, open, OFlag};
-use nix::sys::socket::{self, connect, shutdown, socket, sockopt, Shutdown, SockFlag};
-use nix::sys::socket::{accept4, listen, setsockopt};
-use nix::sys::socket::{AddressFamily, InetAddr, SockAddr, SockProtocol, SockType};
+use nix::sys::sendfile::sendfile;
+use nix::sys::socket::SockFlag;
+use nix::sys::socket::{self, accept4, setsockopt, shutdown, socket, sockopt};
+use nix::sys::stat::fstat;
 use nix::sys::stat::Mode;
 use nix::unistd::{read, write};
 use std::io::{self, stdin, Read, Write};
-use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::os::unix::prelude::AsRawFd;
 use std::str::FromStr;
@@ -16,27 +20,20 @@ use std::str::FromStr;
 pub struct LocalClient {
     hostname: String,
     port: u16,
-    conn_fd: i32,
     connected: bool,
     quit: bool,
+    cmd_conn: Option<Connection>,
     data_conn: Option<Connection>,
 }
 
 impl LocalClient {
     pub fn new() -> Self {
-        let sockfd = socket(
-            AddressFamily::Inet,
-            SockType::Stream,
-            SockFlag::SOCK_CLOEXEC,
-            SockProtocol::Tcp,
-        )
-        .unwrap();
         LocalClient {
             hostname: String::new(),
             port: 8089,
-            conn_fd: sockfd,
             connected: false,
             quit: false,
+            cmd_conn: None,
             data_conn: None,
         }
     }
@@ -72,22 +69,25 @@ impl LocalClient {
         if commands.is_empty() {
             return String::from("Invaild command");
         }
-        let (mut cmd, args) = (commands[0].to_uppercase(), &commands[1..]);
+        let (cmd, args) = (commands[0].to_uppercase(), &commands[1..]);
         match cmd.as_bytes() {
             b"OPEN" => self.open(args),
             b"USER" => self.user(),
             b"PASV" => {
                 let s = self.send_cmd(String::from_str("PASV").unwrap());
-
                 let port = 2222u16;
-                let addr = &format!("127,0,0,1,{},{}", port >> 8, port & 0xFF);
+                let addr = format!("127.0.0.1:{}", port);
                 self.data_conn = Some(Connection::connect(addr.as_str()));
             }
             b"PORT" => self.port(),
             b"CLOSE" => self.close(),
             b"CD" => self.cd(),
             // b"LS" => self.list(),
-            b"PUT" => self.put(),
+            b"PUT" => {
+                for f in args {
+                    self.put(f);
+                }
+            }
             b"GET" => self.get(),
             // b"PWD" => self.pwd(),
             // b"MKDIR" => self.mkdir(),
@@ -127,15 +127,10 @@ impl LocalClient {
         // print!("Password:");
         // stdin().read_line(&mut password).unwrap();
 
-        let addr = SocketAddr::from_str("127.0.0.1:8089").unwrap();
-        let inet_addr = InetAddr::from_std(&addr);
-        let sock_addr = SockAddr::new_inet(inet_addr);
         let username = String::new();
         let password = String::new();
-        match connect(self.conn_fd, &sock_addr) {
-            Ok(()) => println!("Connection success!"),
-            Err(e) => println!("Connection failed: {}", e),
-        }
+        let addr = format!("127.0.0.1:8089");
+        self.cmd_conn = Some(Connection::connect(addr.as_str()));
         self.login(username, password);
         self.binary();
     }
@@ -152,23 +147,11 @@ impl LocalClient {
     fn is_open(&self) -> bool {
         false
     }
-    fn send_cmd(&self, cmd: String) -> String {
-        println!("send msg: {}", cmd);
-        match write(self.conn_fd, cmd.as_bytes()) {
-            Ok(0) => println!("Invalid command"),
-            Ok(n) => {}
-            Err(_) => println!("Invalid command"),
-        }
-        let mut buf: Vec<u8> = Vec::new();
-        match read(self.conn_fd, &mut buf) {
-            Ok(n) => {
-                println!("result {:?}", buf);
-            }
-            Ok(0) => (),
-            Err(err) => {
-                println!("error: {}", err);
-            }
-        }
+    fn send_cmd(&mut self, cmd: String) -> String {
+        debug!("send msg: {}", cmd);
+        self.cmd_conn.as_mut().unwrap().send(cmd.as_bytes());
+        self.cmd_conn.as_mut().unwrap().read();
+        let buf = self.cmd_conn.as_mut().unwrap().get_msg();
         String::from_utf8_lossy(&buf).to_string()
     }
     fn port(&mut self) {
@@ -190,23 +173,38 @@ impl LocalClient {
     }
 
     fn cd(&mut self) {}
-    fn put(&mut self) {
-        if let Some(mut c) = self.data_conn.clone() {
-            let fd = open("hello", OFlag::O_RDWR, Mode::all()).unwrap();
-            let mut buf = [0u8; 512];
-            loop {
-                match read(fd, &mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        c.send(&buf);
-                        println!("send file {} size", n);
-                    }
-                    Err(_) => {
-                        println!("read file error");
-                    }
-                }
-            }
+    fn put(&mut self, path: &str) {
+        // TODO: check file position.
+        // check connection
+        // 上传文件的默认权限
+        // 支持断点续传
+        // 在服务端进行限速
+        self.send_cmd(format!("STOR {}", path));
+        if let Some(c) = self.data_conn.clone() {
+            self.send_answer(Answer::new(
+                ResultCode::DataConnOpened,
+                "Starting to send file...",
+            ));
+            let fd = open(path, OFlag::O_RDONLY, Mode::all()).unwrap();
+            let lock = FileLock::new(fd);
+            lock.lock(false);
+            let stat = fstat(fd).unwrap();
+            let len = stat.st_size as usize;
+            let len = sendfile(c.get_fd(), fd, None, len).unwrap();
+            debug!("-> file: {} transfer done! size: {}", path, len);
+        } else {
+            warn!("No opened data connection!");
         }
+    }
+    fn send_answer(&mut self, answer: Answer) {
+        if let Some(c) = self.cmd_conn.as_mut() {
+            let buf = format!("{} {}", answer.code as i32, answer.message);
+            c.send(buf.as_bytes());
+        }
+    }
+    fn invaild_path(&self, path: &str) -> bool {
+        // TODO
+        true
     }
     fn upload(&mut self) {}
     fn get(&mut self) {}
@@ -243,7 +241,10 @@ impl LocalClient {
     }
     fn exit(&mut self) {
         if self.is_open() {
-            shutdown(self.conn_fd, Shutdown::Both).expect("can't shutdown connection");
+            // self.cmd_conn.unwrap().deregister(&mut self.event_loop);
+            // self.data_conn.unwrap().deregister(&mut self.event_loop);
+            self.cmd_conn = None;
+            self.data_conn = None;
         }
         self.quit = true;
     }

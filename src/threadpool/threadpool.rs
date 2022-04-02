@@ -23,6 +23,7 @@ impl ThreadPool {
         for id in 0..size {
             workers.push(Worker::new(id, Arc::clone(&receiver)));
         }
+        debug!("Start {} worker.", workers.len());
         ThreadPool { workers, sender }
     }
 
@@ -43,16 +44,12 @@ impl Drop for ThreadPool {
         for _ in &self.workers {
             self.sender.send(Message::Terminate).unwrap();
         }
-
-        debug!("Shutting down all workers.");
-
         for worker in &mut self.workers {
-            debug!("Shutting down worker {}", worker.id);
-
             if let Some(thread) = worker.thread.take() {
                 thread.join().unwrap();
             }
         }
+        debug!("Shutting down {} worker", self.workers.len());
     }
 }
 
@@ -67,13 +64,9 @@ impl Worker {
             let message = receiver.lock().unwrap().recv().unwrap();
             match message {
                 Message::NewJob(job) => {
-                    debug!("Worker {} got a job; executing.", id);
-
                     job();
                 }
                 Message::Terminate => {
-                    debug!("Worker {} was told to terminate.", id);
-
                     break;
                 }
             }

@@ -97,7 +97,7 @@ impl Command {
             .unwrap()
             .to_vec();
         // 先移除\r\
-        debug!("command: {}", String::from_utf8(command.clone()).unwrap());
+        // debug!("command: {}", String::from_utf8(command.clone()).unwrap());
         // to uppercase
         let command = String::from_utf8_lossy(&command).to_ascii_uppercase();
         let data = iter

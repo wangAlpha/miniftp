@@ -10,10 +10,9 @@ log =  "0.4.14"
 bytes = "1.1.0"
 yaml-rust = "0.4.5"
 nix = "0.23.0"
-slab = "0.4"
+num_cpus = "1.13.1"
 env_logger = "0.9"
 chrono = "0.4.19"
-num_cpus = "1.13.1"
-regex = "1.5.5"
-lazy_static = "1.4.0"
-clap = "3.1.6"
+
+[profile.dev]
+opt-level = 0

@@ -1,4 +1,5 @@
 use log::{debug, info, warn};
+use nix::errno::Errno;
 use nix::sys::epoll::EpollFlags;
 use nix::sys::socket::{accept4, connect, setsockopt, sockopt};
 use nix::sys::socket::{getpeername, shutdown, socket, Shutdown};
@@ -9,7 +10,7 @@ use std::os::unix::prelude::AsRawFd;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
-use super::server::{ConTyp, EventLoop, Token};
+use super::server::{EventLoop, Token};
 pub type ConnRef = Arc<Mutex<Connection>>;
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub enum State {
@@ -80,10 +81,10 @@ impl Connection {
         let addr = SocketAddr::from_str(addr).unwrap();
         let inet_addr = InetAddr::from_std(&addr);
         let sock_addr = SockAddr::new_inet(inet_addr);
-
+        // TODO: add a exception handle
         match connect(sockfd, &sock_addr) {
-            Ok(()) => println!("Connection success!"),
-            Err(e) => println!("Connection failed: {}", e),
+            Ok(()) => debug!("a new connection: {}", sockfd),
+            Err(e) => warn!("connect failed: {}", e),
         }
         return Connection::new(sockfd);
     }
@@ -94,8 +95,12 @@ impl Connection {
         c
     }
 
+    pub fn connected(&self) -> bool {
+        self.state != State::Closed
+    }
+
     pub fn dispatch(&mut self, revents: EpollFlags) -> State {
-        debug!("connection {} state: {:?}", self.fd, self.state);
+        self.state = State::Ready;
         if revents.is_readable() {
             self.read();
         }
@@ -103,7 +108,7 @@ impl Connection {
             self.write();
         }
         if revents.is_error() {
-            // self.state = State::Closed;
+            self.state = State::Closed;
         }
         if revents.is_close() {
             self.state = State::Closed;
@@ -117,7 +122,6 @@ impl Connection {
         self.state
     }
     pub fn get_msg(&mut self) -> Vec<u8> {
-        self.state = State::Reading;
         let buf = self.read_buf.to_owned();
         self.read_buf.clear();
         buf
@@ -157,20 +161,29 @@ impl Connection {
     }
     pub fn read(&mut self) {
         let mut buf = [0u8; 1024];
-        match read(self.fd, &mut buf) {
-            Ok(0) => self.state = State::Closed,
-            Ok(n) => {
-                self.read_buf.extend_from_slice(&buf[0..n]);
-                self.state = if n == buf.len() {
-                    State::Reading
-                } else {
-                    State::Finished
-                };
-                print!("read len: {} data: {}", n, String::from_utf8_lossy(&buf));
+        while self.state != State::Finished && self.state != State::Closed {
+            match read(self.fd, &mut buf) {
+                Ok(0) => self.state = State::Finished,
+                Ok(n) => {
+                    self.read_buf.extend_from_slice(&buf[0..n]);
+                    self.state = State::Reading;
+                    if n != buf.len() {
+                        self.state = State::Finished;
+                        break;
+                    }
+                    // debug!("Read data len: {}", n);
+                }
+                Err(Errno::EINTR) => debug!("Read EINTR error"),
+                Err(e) => {
+                    self.state = State::Closed;
+                    warn!("Read error: {}", e);
+                }
             }
-            Err(e) => {
-                self.state = State::Closed;
-                warn!("read error: {}", e);
+            // TODO: buffer replace vec
+            if self.write_buf.len() >= 64 * 1024 {
+                self.state = State::Reading;
+                debug!("Send data size exceed 64kB");
+                break;
             }
         }
     }
