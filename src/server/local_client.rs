@@ -1,20 +1,21 @@
 use super::connection::Connection;
-use crate::{
-    handler::cmd::{Answer, ResultCode},
-    server::record_lock::FileLock,
-};
+use crate::handler::cmd::{Answer, ResultCode};
+use crate::server::record_lock::{self, FileLock};
 use log::{debug, info, warn};
 use nix::fcntl::{self, open, OFlag};
 use nix::sys::sendfile::sendfile;
 use nix::sys::socket::SockFlag;
-use nix::sys::socket::{self, accept4, setsockopt, shutdown, socket, sockopt};
-use nix::sys::stat::fstat;
-use nix::sys::stat::Mode;
-use nix::unistd::{read, write};
-use std::io::{self, stdin, Read, Write};
+use nix::sys::socket::{self, accept4, setsockopt, sockopt};
+use nix::sys::stat::lstat;
+use nix::sys::stat::{Mode, SFlag};
 use std::net::TcpListener;
 use std::os::unix::prelude::AsRawFd;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::{
+    io::{self, stdin, Write},
+    ops::BitAnd,
+};
 
 #[derive(Debug)]
 pub struct LocalClient {
@@ -75,6 +76,7 @@ impl LocalClient {
             b"USER" => self.user(),
             b"PASV" => {
                 let s = self.send_cmd(String::from_str("PASV").unwrap());
+                info!("Reply msg: {}", s);
                 let port = 2222u16;
                 let addr = format!("127.0.0.1:{}", port);
                 self.data_conn = Some(Connection::connect(addr.as_str()));
@@ -84,8 +86,9 @@ impl LocalClient {
             b"CD" => self.cd(),
             // b"LS" => self.list(),
             b"PUT" => {
-                for f in args {
-                    self.put(f);
+                for path in args {
+                    let path = Path::new(path);
+                    self.stor(path);
                 }
             }
             b"GET" => self.get(),
@@ -173,13 +176,13 @@ impl LocalClient {
     }
 
     fn cd(&mut self) {}
-    fn put(&mut self, path: &str) {
+    fn stor(&mut self, path: &Path) {
         // TODO: check file position.
         // check connection
         // 上传文件的默认权限
         // 支持断点续传
         // 在服务端进行限速
-        self.send_cmd(format!("STOR {}", path));
+        self.send_cmd(format!("STOR {}", path.display()));
         if let Some(c) = self.data_conn.clone() {
             self.send_answer(Answer::new(
                 ResultCode::DataConnOpened,
@@ -188,10 +191,14 @@ impl LocalClient {
             let fd = open(path, OFlag::O_RDONLY, Mode::all()).unwrap();
             let lock = FileLock::new(fd);
             lock.lock(false);
-            let stat = fstat(fd).unwrap();
-            let len = stat.st_size as usize;
-            let len = sendfile(c.get_fd(), fd, None, len).unwrap();
-            debug!("-> file: {} transfer done! size: {}", path, len);
+
+            if is_regular(path) {
+                let len = get_file_size(path);
+                let len = sendfile(c.get_fd(), fd, None, len).unwrap();
+                debug!("-> file: {:?} transfer done! size: {}", path, len);
+            } else {
+                warn!("{:?} is not regular file", path);
+            }
         } else {
             warn!("No opened data connection!");
         }
@@ -241,11 +248,31 @@ impl LocalClient {
     }
     fn exit(&mut self) {
         if self.is_open() {
-            // self.cmd_conn.unwrap().deregister(&mut self.event_loop);
-            // self.data_conn.unwrap().deregister(&mut self.event_loop);
+            self.cmd_conn.as_mut().unwrap().shutdown();
+            // self.data_conn.clone().unwrap().lock().shutdown();
             self.cmd_conn = None;
             self.data_conn = None;
         }
         self.quit = true;
+    }
+}
+
+pub fn is_regular(path: &Path) -> bool {
+    match lstat(path) {
+        Ok(stat) => SFlag::S_IFREG.bits() & stat.st_mode == SFlag::S_IFREG.bits(),
+        Err(e) => {
+            warn!("Can't get path {:?} state, {}", path, e);
+            false
+        }
+    }
+}
+
+pub fn get_file_size(path: &Path) -> usize {
+    match lstat(path) {
+        Ok(stat) => stat.st_size as usize,
+        Err(e) => {
+            warn!("Can't get path {:?} state, {}", path, e);
+            0
+        }
     }
 }

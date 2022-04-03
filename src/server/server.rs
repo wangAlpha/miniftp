@@ -3,7 +3,7 @@ use super::poller::Poller;
 use super::queue::{BlockingQueue, BlockingQueueRef};
 use crate::handler::session::{self, Session};
 use crate::threadpool::threadpool::ThreadPool;
-use log::debug;
+use log::{debug, info};
 use nix::fcntl::{flock, open, FlockArg, OFlag};
 use nix::libc::exit;
 use nix::sys::epoll::{EpollEvent, EpollFlags, EpollOp};
@@ -13,11 +13,11 @@ use nix::sys::signal::{SigHandler, SigSet, SigmaskHow, Signal};
 use nix::sys::stat::{umask, Mode};
 use nix::unistd::{chdir, fork, ftruncate, getpid, setsid, write};
 use num_cpus;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
 use std::net::TcpListener;
 use std::os::unix::prelude::AsRawFd;
 use std::sync::{Arc, Mutex};
-use std::{collections::HashMap, fmt::Debug};
 
 pub const EVENT_LEVEL: EpollFlags = EpollFlags::EPOLLET;
 pub const EVENT_READ: EpollFlags = EpollFlags::EPOLLIN;
@@ -189,7 +189,6 @@ impl FtpServer {
             pool.execute(move || loop {
                 let (conn, msg) = q_clone.pop_front();
                 let fd = conn.lock().unwrap().get_fd();
-                println!("conn_map: {:?}, fd: {}", conn_map, fd);
                 if conn_map.lock().unwrap().contains_key(&fd) {
                     let data_fd = conn.lock().unwrap().get_fd();
                     let cmd_fd = conn_map.lock().unwrap()[&data_fd];
@@ -228,11 +227,11 @@ impl Handler for FtpServer {
     type Message = String;
     type Timeout = i32;
     fn ready(&mut self, event_loop: &mut EventLoop, token: Token, revents: EpollFlags) {
-        debug!("a new event token: {:?}", token);
         match token {
             Token::Listen(listen_fd) => {
                 let mut conn = Connection::accept(listen_fd);
                 let fd = conn.get_fd();
+                debug!("a new connection event fd: {:?}", token);
                 conn.register_read(event_loop);
                 self.conn_list.insert(fd, Arc::new(Mutex::new(conn)));
             }
@@ -242,7 +241,7 @@ impl Handler for FtpServer {
                     .or_insert(Arc::new(Mutex::new(Connection::new(fd))));
                 // ugly clone
                 let state = self.conn_list[&fd].lock().unwrap().dispatch(revents);
-                debug!("state: {:?}", state);
+                debug!("A W/R event fd:{} state: {:?}", fd, state);
                 if state == State::Finished || state == State::Closed {
                     let msg = self.conn_list[&fd].lock().unwrap().get_msg();
                     if !msg.is_empty() {
@@ -263,8 +262,13 @@ impl Handler for FtpServer {
 
 pub fn run_server() {
     // daemonize();
-    let (_, listener) = Connection::bind("0.0.0.0:8089");
-    debug!("Tcp listener: {:?}", listener);
+    let addr = "0.0.0.0:8089";
+    let (_, listener) = Connection::bind(addr);
+    info!(
+        "Start sever listener, addr: {}, fd: {:?}",
+        addr,
+        listener.as_raw_fd()
+    );
 
     let mut event_loop = EventLoop::new(listener);
     let mut ftpserver = FtpServer::new(&mut event_loop);

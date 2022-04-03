@@ -1,4 +1,4 @@
-use log::{debug, info, warn};
+use log::{debug, warn};
 use nix::errno::Errno;
 use nix::sys::epoll::EpollFlags;
 use nix::sys::socket::{accept4, connect, setsockopt, sockopt};
@@ -9,6 +9,7 @@ use std::net::{SocketAddr, TcpListener};
 use std::os::unix::prelude::AsRawFd;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use std::{f32::consts::E, fmt::Result};
 
 use super::server::{EventLoop, Token};
 pub type ConnRef = Arc<Mutex<Connection>>;
@@ -139,13 +140,19 @@ impl Connection {
     }
     pub fn deregister(&self, event_loop: &mut EventLoop) {
         event_loop.deregister(self.fd);
-        shutdown(self.fd, Shutdown::Both).unwrap();
+        self.shutdown();
     }
     pub fn shutdown(&self) {
-        shutdown(self.fd, Shutdown::Both).unwrap();
+        match shutdown(self.fd, Shutdown::Both) {
+            Ok(()) => (),
+            Err(e) => warn!("Shutdown {} occur {} error", self.fd, e),
+        }
     }
     pub fn send(&mut self, buf: &[u8]) {
-        write(self.fd, buf).unwrap();
+        match write(self.fd, buf) {
+            Ok(_) => (),
+            Err(e) => warn!("send data error: {}", e),
+        };
     }
     pub fn write_buf(&mut self, buf: &[u8]) {
 
@@ -169,11 +176,12 @@ impl Connection {
                     self.state = State::Reading;
                     if n != buf.len() {
                         self.state = State::Finished;
+                        debug!("Read data len: {}", n);
                         break;
                     }
-                    // debug!("Read data len: {}", n);
                 }
                 Err(Errno::EINTR) => debug!("Read EINTR error"),
+                Err(Errno::EAGAIN) => debug!("Read EAGIN error"),
                 Err(e) => {
                     self.state = State::Closed;
                     warn!("Read error: {}", e);
