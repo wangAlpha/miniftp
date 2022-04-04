@@ -1,49 +1,26 @@
-use super::connection::{ConnRef, Connection, State};
-use super::poller::Poller;
-use super::queue::{BlockingQueue, BlockingQueueRef};
-use crate::handler::session::{self, Session};
+use crate::net::connection::{ConnRef, Connection, State};
+use crate::net::event_loop::{EventLoop, Handler, Token};
+use crate::net::queue::{BlockingQueue, BlockingQueueRef};
 use crate::threadpool::threadpool::ThreadPool;
+use crate::{
+    handler::session::Session,
+    utils::config::{Config, DEFAULT_CONF_FILE},
+};
 use log::{debug, info};
 use nix::fcntl::{flock, open, FlockArg, OFlag};
 use nix::libc::exit;
-use nix::sys::epoll::{EpollEvent, EpollFlags, EpollOp};
+use nix::sys::epoll::EpollFlags;
 use nix::sys::resource::*;
 use nix::sys::signal::{pthread_sigmask, signal};
 use nix::sys::signal::{SigHandler, SigSet, SigmaskHow, Signal};
 use nix::sys::stat::{umask, Mode};
 use nix::unistd::{chdir, fork, ftruncate, getpid, setsid, write};
 use num_cpus;
-use std::collections::{HashMap, HashSet};
-use std::fmt::Debug;
-use std::net::TcpListener;
+use std::collections::HashMap;
 use std::os::unix::prelude::AsRawFd;
 use std::sync::{Arc, Mutex};
 
-pub const EVENT_LEVEL: EpollFlags = EpollFlags::EPOLLET;
-pub const EVENT_READ: EpollFlags = EpollFlags::EPOLLIN;
-pub const EVENT_ERR: EpollFlags = EpollFlags::EPOLLERR;
-pub const EVENT_HUP: EpollFlags = EpollFlags::EPOLLHUP;
-
 const LOCK_FILE: &str = "/var/run/miniftp.pid";
-
-// fd, and listen fd
-#[derive(Debug, Clone, Copy)]
-pub enum ConTyp {
-    Cmd,
-    Data,
-}
-#[derive(Debug, Clone, Copy)]
-pub enum Token {
-    Listen(i32),
-    Read(i32),
-}
-
-pub trait Handler: Sized {
-    type Timeout;
-    type Message;
-    fn ready(&mut self, event_loop: &mut EventLoop, token: Token, revent: EpollFlags);
-    fn notify(&mut self, event_loop: &mut EventLoop, token: Token, revent: EpollFlags);
-}
 
 pub fn daemonize() {
     umask(Mode::empty());
@@ -59,16 +36,6 @@ pub fn daemonize() {
     pthread_sigmask(SigmaskHow::SIG_BLOCK, Some(&SigSet::all()), None).unwrap();
     setsid().expect("can't set sid");
     chdir("/").unwrap();
-
-    // let fd0 = open("/dev/null", OFlag::O_RDWR, Mode::empty()).unwrap();
-    // let fd1 = dup(0).unwrap();
-    // let fd2 = dup(0).unwrap();
-    // if fd0 != 0 || fd1 != 1 || fd2 != 2 {
-    //     error!("unexpected file descriptors {} {} {}", fd0, fd1, fd2);
-    //     unsafe {
-    //         exit(1);
-    //     }
-    // }
 }
 
 pub fn already_runing() -> bool {
@@ -84,89 +51,6 @@ pub fn already_runing() -> bool {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct EventLoop {
-    listener: Arc<TcpListener>,
-    data_listener: Arc<Mutex<HashMap<i32, TcpListener>>>,
-    data_conn: Arc<Mutex<HashSet<i32>>>,
-    poller: Poller,
-    run: bool,
-}
-
-impl EventLoop {
-    pub fn new(listener: TcpListener) -> Self {
-        let mut poller = Poller::new();
-        let interest = EpollFlags::EPOLLHUP
-            | EpollFlags::EPOLLERR
-            | EpollFlags::EPOLLIN
-            | EpollFlags::EPOLLOUT
-            | EpollFlags::EPOLLET;
-        poller.register(listener.as_raw_fd(), interest);
-        EventLoop {
-            listener: Arc::new(listener),
-            data_listener: Arc::new(Mutex::new(HashMap::new())),
-            run: true,
-            poller,
-            data_conn: Arc::new(Mutex::new(HashSet::new())),
-        }
-    }
-    pub fn register(&mut self, listener: TcpListener, interest: EpollFlags) {
-        let fd = listener.as_raw_fd();
-        self.data_listener.lock().unwrap().insert(fd, listener);
-        self.poller.register(fd, interest);
-    }
-    pub fn is_data_conn(&self, fd: i32) -> bool {
-        self.data_listener.lock().unwrap().contains_key(&fd)
-    }
-    pub fn register_listen(&mut self, listener: TcpListener) {
-        self.register(
-            listener,
-            EpollFlags::EPOLLHUP
-                | EpollFlags::EPOLLERR
-                | EpollFlags::EPOLLIN
-                | EpollFlags::EPOLLOUT
-                | EpollFlags::EPOLLET,
-        );
-    }
-    pub fn reregister(&self, fd: i32, interest: EpollFlags) {
-        let event = EpollEvent::new(interest, fd as u64);
-        self.poller
-            .update(EpollOp::EpollCtlAdd, fd, &mut Some(event));
-    }
-    pub fn deregister(&self, fd: i32) {
-        self.poller.update(EpollOp::EpollCtlDel, fd, &mut None);
-    }
-    pub fn is_new_conn(&self, fd: i32) -> bool {
-        self.listener.as_raw_fd() == fd || self.data_listener.lock().unwrap().contains_key(&fd)
-    }
-    pub fn run<H>(&mut self, handler: &mut H)
-    where
-        H: Handler,
-    {
-        while self.run {
-            let cnt = self.poller.poll();
-            // io ready event: connection
-            for i in 0..cnt {
-                let (fd, event) = self.poller.event(i);
-                let token = if fd == self.listener.as_raw_fd() {
-                    Token::Listen(fd)
-                } else if self.data_listener.lock().unwrap().contains_key(&fd) {
-                    Token::Listen(fd)
-                } else {
-                    Token::Read(fd)
-                };
-                handler.ready(self, token, event.events());
-            }
-            // io read and write event
-            // for i in 0..cnt {
-            //     let (fd, event) = self.poller.event(i);
-            //     handler.notify(self, token, event.events());
-            // }
-        }
-    }
-}
-// pub enum Mode {}
-
 type TaskQueueRef = BlockingQueueRef<(ConnRef, Vec<u8>)>;
 pub struct FtpServer {
     conn_list: HashMap<i32, ConnRef>,
@@ -178,17 +62,21 @@ pub struct FtpServer {
 impl FtpServer {
     pub fn new(event_loop: &mut EventLoop) -> Self {
         let q: TaskQueueRef = BlockingQueueRef::new(BlockingQueue::new(64));
-        let pool = ThreadPool::new(num_cpus::get());
+        let pool = ThreadPool::new(0);
         let sessions = Arc::new(Mutex::new(HashMap::<i32, Session>::new()));
         let data_listen_map = Arc::new(Mutex::new(HashMap::<i32, i32>::new()));
+        let config = Config::new(DEFAULT_CONF_FILE);
+
         for _ in 0..num_cpus::get() {
             let q_clone = q.clone();
             let event_loop = event_loop.clone();
             let sessions = sessions.clone();
             let mut conn_map = data_listen_map.clone();
+            let config = config.clone();
             pool.execute(move || loop {
                 let (conn, msg) = q_clone.pop_front();
                 let fd = conn.lock().unwrap().get_fd();
+                // TODO: how to clean conn_map
                 if conn_map.lock().unwrap().contains_key(&fd) {
                     let data_fd = conn.lock().unwrap().get_fd();
                     let cmd_fd = conn_map.lock().unwrap()[&data_fd];
@@ -202,7 +90,7 @@ impl FtpServer {
                 } else {
                     let cmd_fd = fd;
                     if !sessions.lock().unwrap().contains_key(&cmd_fd) {
-                        let s = Session::new(conn, event_loop.clone());
+                        let s = Session::new(&config, conn, event_loop.clone());
                         sessions.lock().unwrap().insert(cmd_fd, s);
                     }
                     sessions

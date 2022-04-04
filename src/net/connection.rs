@@ -1,3 +1,4 @@
+use super::event_loop::EventLoop;
 use log::{debug, warn};
 use nix::errno::Errno;
 use nix::sys::epoll::EpollFlags;
@@ -9,9 +10,7 @@ use std::net::{SocketAddr, TcpListener};
 use std::os::unix::prelude::AsRawFd;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
-use std::{f32::consts::E, fmt::Result};
 
-use super::server::{EventLoop, Token};
 pub type ConnRef = Arc<Mutex<Connection>>;
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub enum State {
@@ -49,6 +48,7 @@ impl EventSet for EpollFlags {
         (*self & EpollFlags::EPOLLHUP).bits() > 0
     }
 }
+
 #[derive(Debug, Clone)]
 pub struct Connection {
     fd: i32,
@@ -92,8 +92,7 @@ impl Connection {
     pub fn accept(listen_fd: i32) -> Self {
         let fd = accept4(listen_fd, SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK).unwrap();
         setsockopt(fd, sockopt::TcpNoDelay, &true).unwrap();
-        let mut c = Connection::new(fd);
-        c
+        Connection::new(fd)
     }
 
     pub fn connected(&self) -> bool {

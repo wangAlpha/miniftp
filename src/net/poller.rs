@@ -1,4 +1,4 @@
-use log::{info, warn};
+use log::warn;
 use nix::fcntl::fcntl;
 use nix::fcntl::FcntlArg;
 use nix::sys::epoll::{epoll_create1, epoll_ctl, epoll_wait};

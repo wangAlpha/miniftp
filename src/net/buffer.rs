@@ -1,6 +1,4 @@
-use bytes::Buf;
-use std::{cmp, fmt, io, ptr};
-
+use std::{fmt, io, ptr};
 pub struct Buffer {
     data: Vec<u8>,
     read_index: usize,
@@ -41,18 +39,18 @@ impl Buffer {
     }
 }
 
-impl Buf for Buffer {
-    fn remaining(&self) -> usize {
-        self.write_index - self.read_index
-    }
-    fn bytes(&self) -> &[u8] {
-        &self.data[self.read_index..self.write_index]
-    }
-    fn advance(&mut self, cnt: usize) {
-        let cnt = cmp::min(cnt, self.write_index - self.read_index);
-        self.read_index += cnt;
-    }
-}
+// impl Buf for Buffer {
+//     fn remaining(&self) -> usize {
+//         self.write_index - self.read_index
+//     }
+//     // fn bytes(&self) -> &[u8] {
+//     //     &self.data[self.read_index..self.write_index]
+//     // }
+//     fn advance(&mut self, cnt: usize) {
+//         let cnt = cmp::min(cnt, self.write_index - self.read_index);
+//         self.read_index += cnt;
+//     }
+// }
 
 impl fmt::Debug for Buffer {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {

@@ -1,4 +1,5 @@
 use log::debug;
+use num_cpus;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
@@ -14,7 +15,8 @@ type Job = Box<dyn FnOnce() + Send + 'static>;
 
 impl ThreadPool {
     pub fn new(size: usize) -> ThreadPool {
-        assert!(size > 0);
+        // assert!(size > 0);
+        let size = if size > 0 { size } else { num_cpus::get() };
 
         let (sender, receiver) = mpsc::channel();
         let receiver = Arc::new(Mutex::new(receiver));

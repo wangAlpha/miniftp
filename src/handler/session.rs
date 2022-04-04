@@ -1,29 +1,20 @@
 use super::cmd::*;
-use super::codec::{Encoder, FtpCodec};
-use crate::server::connection::{ConnRef, Connection, State};
+use super::codec::FtpCodec;
+use crate::net::connection::{ConnRef, Connection, State};
+use crate::net::event_loop::EventLoop;
 use crate::server::local_client::*;
-use crate::server::server::EventLoop;
+use crate::utils::config::Config;
 use chrono::prelude::*;
 use log::{debug, info, warn};
-use nix::dir::Dir;
-use nix::dir::Type;
-use nix::fcntl::OFlag;
-use nix::libc::rmdir;
-use crate::utils::config::{User, Config};
-use nix::sys::stat::lstat;
-use nix::sys::stat::{mode_t, SFlag};
-use nix::unistd::chdir;
-use nix::unistd::mkdir;
-use nix::unistd::unlink;
-use nix::unistd::{close, read, write};
-use nix::{fcntl::open, sys::stat::Mode};
+use nix::dir::{Dir, Type};
+use nix::fcntl::{open, OFlag};
+use nix::sys::stat::{lstat, Mode, SFlag};
+use nix::unistd::{chdir, close, mkdir, read, unlink, write};
 use std::collections::HashMap;
 use std::iter::Iterator;
 use std::net::TcpListener;
-use std::os::raw::c_char;
 use std::os::unix::prelude::AsRawFd;
-use std::path::{Component, Path, PathBuf, StripPrefixError};
-use std::str::FromStr;
+use std::path::{Component, Path, PathBuf};
 use std::string::String;
 use std::sync::{Arc, Mutex};
 #[derive(Debug, Clone)]
@@ -52,14 +43,14 @@ pub struct Session {
     name: Option<String>,
     is_admin: bool,
     transfer_type: TransferType,
-    config: Config,
     curr_file_context: Option<Context>,
     waiting_pwd: bool,
     event_loop: EventLoop,
+    config: Config,
 }
 
 impl Session {
-    pub fn new(conn: ConnRef, event_loop: EventLoop) -> Self {
+    pub fn new(config: &Config, conn: ConnRef, event_loop: EventLoop) -> Self {
         Session {
             cwd: PathBuf::new(),
             cmd_conn: conn,
@@ -73,7 +64,7 @@ impl Session {
             event_loop,
             curr_file_context: None,
             name: None,
-            config: Config::new(""),
+            config: config.clone(),
         }
     }
     pub fn handle_command(&mut self, msg: Vec<u8>, conn_map: &mut Arc<Mutex<HashMap<i32, i32>>>) {
@@ -107,7 +98,7 @@ impl Session {
                     self.stor(path);
                 }
                 Command::CdUp => {
-                   let path = self.cwd.as_path();
+                    let path = self.cwd.as_path();
                     // TODO: Cd pathbuf
                     // self.cwd = chdir(path).unwrap();
                     // get_path
@@ -133,31 +124,34 @@ impl Session {
                             "Invaild username",
                         ));
                     } else {
-                        let mut name = None;
+                        // let mut name = None;
                         let mut pass_required = true;
                         self.is_admin = false;
 
-                        if let Some(ref admin) = self.config.admin {
-
-                        }
+                        if let Some(ref admin) = self.config.admin {}
                     }
                     self.send_answer(Answer::new(ResultCode::Ok, "Login success"))
                 }
                 Command::Type(typ) => {
                     self.transfer_type = typ;
-                    let mode = if typ == TransferType::ASCII {"ASCII"} else {"BINARY"};
+                    let mode = if typ == TransferType::ASCII {
+                        "ASCII"
+                    } else {
+                        "BINARY"
+                    };
                     let msg = format!("Using {} mode to transfer files.", mode);
                     self.send_answer(Answer::new(ResultCode::Ok, &msg));
                 }
-                Command::Syst=> {
+                Command::Syst => {
                     // TODO:
-                    self.send_answer(Answer::new(ResultCode::Ok, "I won't tell you!")),
+                    self.send_answer(Answer::new(ResultCode::Ok, "I won't tell you!"));
                 }
-                Command::NoOp => {
-                    self.send_answer(Answer::new(ResultCode::Ok, "Doing nothing"))
-                }
-                Command::Unknown(s)=>{
-                    self.send_answer(Answer::new(ResultCode::SyntaxErr, &format("\"{}\": not implemented", s)));
+                Command::NoOp => self.send_answer(Answer::new(ResultCode::Ok, "Doing nothing")),
+                Command::Unknown(s) => {
+                    self.send_answer(Answer::new(
+                        ResultCode::SyntaxErr,
+                        &format!("\"{}\": not implemented", s),
+                    ));
                 }
                 _ => (),
             }
@@ -448,9 +442,9 @@ pub fn remove_dir_all(path: &Path) -> bool {
     }
     let dir = Dir::open(path, OFlag::O_DIRECTORY, Mode::S_IXUSR).unwrap();
     for entry in dir.into_iter() {
-        let file_name = entry.unwrap().file_name().to_str().unwrap();
-        let path = Path::new(file_name);
-        let file_type = entry.unwrap().file_type().unwrap();
+        let entry = entry.unwrap();
+        let path = Path::new(entry.file_name().to_str().unwrap());
+        let file_type = entry.file_type().unwrap();
         if file_type == Type::Directory {
             remove_dir_all(path);
         } else if file_type == Type::Symlink {

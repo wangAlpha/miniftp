@@ -1,21 +1,18 @@
-use super::connection::Connection;
 use crate::handler::cmd::{Answer, ResultCode};
-use crate::server::record_lock::{self, FileLock};
+use crate::net::connection::Connection;
+use crate::server::record_lock::FileLock;
 use log::{debug, info, warn};
-use nix::fcntl::{self, open, OFlag};
+use nix::fcntl::{open, OFlag};
 use nix::sys::sendfile::sendfile;
 use nix::sys::socket::SockFlag;
-use nix::sys::socket::{self, accept4, setsockopt, sockopt};
+use nix::sys::socket::{accept4, setsockopt, sockopt};
 use nix::sys::stat::lstat;
 use nix::sys::stat::{Mode, SFlag};
+use std::io::{self, stdin, Write};
 use std::net::TcpListener;
 use std::os::unix::prelude::AsRawFd;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::str::FromStr;
-use std::{
-    io::{self, stdin, Write},
-    ops::BitAnd,
-};
 
 #[derive(Debug)]
 pub struct LocalClient {

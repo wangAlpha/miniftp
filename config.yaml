@@ -1,16 +1,14 @@
-# 监听地址
-listen_addr: "0.0.0.0:2222"
-
-connection_port: 2221 # PORT 模式下的数据端口
-# PASV 模式，指定该模式下可以使用的端口范围
-pasv_min_port: 2222
-pasv_max_port: 2222
-# force_passive_ip: "" # 若使用程序自动解析的 ip 地址，则填为空字符串 ""
-
-# 数据速度限制
-# 上传速度, 400k Bytes/s
-annon_max_rate: 409600
+server_addr: "127.0.0.1"
+server_port: 8089
+pasv_enable: ture
+pasv_port: [2222, 2222]
+max_rate: 409600
 max_clients: 200
-# 每个 ip 最大能建立的连接数量，无限制请填 0
-max_per_ip: 0
+ssl_enable: true
+rsa_cert_file: "/etc/ssl/certs/ssl-cert-snakeoil.pem"
+rsa_private_key_file: "/etc/ssl/private/ssl-cert-snakeoil.key"
+admin: "123456"
+users:
+    "liwang": ""
+    "anonymous": ""
 

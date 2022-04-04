@@ -1,5 +1,5 @@
 use super::error::{Error, Result};
-use log::{debug, info};
+use log::debug;
 use std::path::PathBuf;
 use std::str::{self, FromStr};
 
