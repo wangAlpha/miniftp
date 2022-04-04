@@ -166,7 +166,7 @@ impl Connection {
         addr
     }
     pub fn read(&mut self) {
-        let mut buf = [0u8; 1024];
+        let mut buf = [0u8; 4 * 1024];
         while self.state != State::Finished && self.state != State::Closed {
             match read(self.fd, &mut buf) {
                 Ok(0) => self.state = State::Finished,

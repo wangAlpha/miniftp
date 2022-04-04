@@ -1,5 +1,5 @@
-use super::cmd::*;
-use super::codec::FtpCodec;
+use crate::handler::cmd::*;
+use crate::handler::codec::FtpCodec;
 use crate::net::connection::{ConnRef, Connection, State};
 use crate::net::event_loop::EventLoop;
 use crate::server::local_client::*;
@@ -9,14 +9,17 @@ use log::{debug, info, warn};
 use nix::dir::{Dir, Type};
 use nix::fcntl::{open, OFlag};
 use nix::sys::stat::{lstat, Mode, SFlag};
+use nix::sys::utsname::uname;
 use nix::unistd::{chdir, close, mkdir, read, unlink, write};
 use std::collections::HashMap;
+use std::env::current_dir;
 use std::iter::Iterator;
 use std::net::TcpListener;
 use std::os::unix::prelude::AsRawFd;
 use std::path::{Component, Path, PathBuf};
 use std::string::String;
 use std::sync::{Arc, Mutex};
+
 #[derive(Debug, Clone)]
 enum DataType {
     ASCII,
@@ -44,7 +47,7 @@ pub struct Session {
     is_admin: bool,
     transfer_type: TransferType,
     curr_file_context: Option<Context>,
-    waiting_pwd: bool,
+    waiting_password: bool,
     event_loop: EventLoop,
     config: Config,
 }
@@ -57,10 +60,10 @@ impl Session {
             data_conn: None,
             data_port: Some(2222),
             codec: FtpCodec,
-            server_root: PathBuf::new(),
+            server_root: current_dir().unwrap(),
             is_admin: true,
             transfer_type: TransferType::ASCII,
-            waiting_pwd: false,
+            waiting_password: false,
             event_loop,
             curr_file_context: None,
             name: None,
@@ -109,8 +112,27 @@ impl Session {
                 // TODO: Command::Rename(srd, dst) =>
                 _ => (),
             }
-        } else if self.name.is_some() && self.waiting_pwd {
-            if let Command::Pass(content) = cmd {}
+        } else if self.name.is_some() && self.waiting_password {
+            if let Command::Pass(content) = cmd {
+                let mut ok = false;
+                if self.is_admin {
+                    ok = content.eq(&self.config.admin.clone().unwrap());
+                } else {
+                    ok = self.config.users[&(self.name.clone().unwrap())] == content;
+                }
+                if ok {
+                    self.waiting_password = false;
+                    self.send_answer(Answer::new(
+                        ResultCode::Login,
+                        &format!("Welcome {}", self.name.clone().unwrap()),
+                    ));
+                } else {
+                    self.send_answer(Answer::new(
+                        ResultCode::LongPassMode,
+                        "Invalid password....",
+                    ));
+                }
+            }
         } else {
             match cmd {
                 Command::Auth => {
@@ -124,11 +146,51 @@ impl Session {
                             "Invaild username",
                         ));
                     } else {
-                        // let mut name = None;
+                        let mut name: Option<String> = None;
                         let mut pass_required = true;
                         self.is_admin = false;
 
-                        if let Some(ref admin) = self.config.admin {}
+                        if let Some(ref admin) = self.config.admin {
+                            self.is_admin = admin.eq(&self.config.admin.clone().unwrap());
+                        }
+                        if self.name.is_none() {
+                            if self.config.users.contains_key(&content) {
+                                self.name = Some(content.clone());
+                                pass_required =
+                                    self.config.users[&(content.clone())].is_empty() == false
+                            }
+                        }
+                        if name.is_none() {
+                            self.send_answer(Answer::new(ResultCode::NotLogin, "Unknown user..."));
+                        } else {
+                            self.name = name.clone();
+                            if pass_required {
+                                self.waiting_password = true;
+                                self.send_answer(Answer::new(
+                                    ResultCode::NeedPsw,
+                                    &format!(
+                                        "Login Ok, password needed for {}",
+                                        name.unwrap().clone()
+                                    ),
+                                ));
+                            } else {
+                                self.waiting_password = false;
+                                let typ = if self.transfer_type == TransferType::BINARY {
+                                    "binary"
+                                } else {
+                                    "ascii"
+                                };
+                                let welcome = format!(
+                                    "Login successful.\r\n
+                                Welcome {}\r\n
+                                Remote system type is UNIX.\r\n
+                                Using {} mode to transfer files.\r\n",
+                                    typ,
+                                    name.unwrap().clone()
+                                );
+                                self.send_answer(Answer::new(ResultCode::Login, &welcome));
+                            }
+                        }
                     }
                     self.send_answer(Answer::new(ResultCode::Ok, "Login success"))
                 }
@@ -143,8 +205,7 @@ impl Session {
                     self.send_answer(Answer::new(ResultCode::Ok, &msg));
                 }
                 Command::Syst => {
-                    // TODO:
-                    self.send_answer(Answer::new(ResultCode::Ok, "I won't tell you!"));
+                    self.send_answer(Answer::new(ResultCode::Ok, &format!("{:?}", uname())));
                 }
                 Command::NoOp => self.send_answer(Answer::new(ResultCode::Ok, "Doing nothing")),
                 Command::Unknown(s) => {
@@ -159,7 +220,7 @@ impl Session {
         debug!("cmd_conn: {} is logged: {}", connected, self.is_logged());
     }
     fn is_logged(&self) -> bool {
-        true
+        self.name.is_some() && self.waiting_password
     }
     fn mkd(&mut self, path: PathBuf) {
         let path = self.cwd.join(&path);
@@ -200,7 +261,7 @@ impl Session {
     fn list(&mut self, path: Option<PathBuf>) {
         if self.data_conn.is_some() {
             let path = self.cwd.join(path.unwrap_or_default());
-            let directory = PathBuf::from(&path);
+            // let directory = PathBuf::from(&path);
             self.send_answer(Answer::new(
                 ResultCode::DataConnOpened,
                 "Starting to list directory...",
@@ -436,7 +497,6 @@ pub fn add_file_info(path: &str, out: &mut Vec<u8>) {
 }
 
 pub fn remove_dir_all(path: &Path) -> bool {
-    let stat = lstat(path).unwrap();
     if !is_dir(path) {
         return false;
     }

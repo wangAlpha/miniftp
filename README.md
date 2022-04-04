@@ -17,6 +17,7 @@ A light sftp server/client
 - 支持限速功能，防止服务过多占用带宽资源
 - 限流，防 DDOS 攻击
 - Reactor 异步方式实现
+- 空闲连接自动剔除
 
 ## 快速运行此代码
 

@@ -1,18 +1,18 @@
 use crate::handler::cmd::{Answer, ResultCode};
+use crate::handler::codec::{BytesCodec, Decoder, Encoder};
 use crate::net::connection::Connection;
 use crate::server::record_lock::FileLock;
 use log::{debug, info, warn};
 use nix::fcntl::{open, OFlag};
 use nix::sys::sendfile::sendfile;
-use nix::sys::socket::SockFlag;
-use nix::sys::socket::{accept4, setsockopt, sockopt};
-use nix::sys::stat::lstat;
-use nix::sys::stat::{Mode, SFlag};
+use nix::sys::socket::{accept4, setsockopt, sockopt, SockFlag};
+use nix::sys::stat::{lstat, Mode, SFlag};
 use std::io::{self, stdin, Write};
 use std::net::TcpListener;
 use std::os::unix::prelude::AsRawFd;
 use std::path::Path;
 use std::str::FromStr;
+use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 pub struct LocalClient {
@@ -22,6 +22,7 @@ pub struct LocalClient {
     quit: bool,
     cmd_conn: Option<Connection>,
     data_conn: Option<Connection>,
+    codec: BytesCodec,
 }
 
 impl LocalClient {
@@ -33,6 +34,7 @@ impl LocalClient {
             quit: false,
             cmd_conn: None,
             data_conn: None,
+            codec: BytesCodec,
         }
     }
     pub fn shell_loop(&mut self) {
@@ -68,60 +70,54 @@ impl LocalClient {
             return String::from("Invaild command");
         }
         let (cmd, args) = (commands[0].to_uppercase(), &commands[1..]);
+        let args = args.to_vec();
         match cmd.as_bytes() {
-            b"OPEN" => self.open(args),
+            b"OPEN" => self.open(&args),
             b"USER" => self.user(),
             b"PASV" => {
-                let s = self.send_cmd(String::from_str("PASV").unwrap());
-                info!("Reply msg: {}", s);
-                let port = 2222u16;
+                let s = self.send_cmd("PASV").unwrap();
+                let port = self.port + 1;
                 let addr = format!("127.0.0.1:{}", port);
                 self.data_conn = Some(Connection::connect(addr.as_str()));
             }
-            b"PORT" => self.port(),
+            b"ABOR" => self.abort(),
             b"CLOSE" => self.close(),
-            b"CD" => self.cd(),
-            // b"LS" => self.list(),
-            b"PUT" => {
-                for path in args {
-                    let path = Path::new(path);
-                    self.stor(path);
-                }
-            }
-            b"GET" => self.get(),
-            // b"PWD" => self.pwd(),
+            b"CD" => self.cd(&args[0]),
+            b"LS" => self.list(&args),
+            b"PUT" => self.put(&args),
+            b"GET" => self.get(&args),
+            b"PWD" => self.pwd(),
             // b"MKDIR" => self.mkdir(),
             // b"RMDIR" => self.rmdir(),
-            b"DEL" => self.del(),
+            b"DEL" => self.delete(args),
             b"STAT" => self.stat(),
             b"SYST" => self.syst(),
             b"BINARY" => self.binary(),
             b"SIZE" => self.size(),
             b"NOOP" => self.noop(),
             b"HELP" => self.help(),
+
             b"EXIT" | b"QUIT" => self.exit(),
             _ => println!("?Invalid command"),
         };
         String::from("_")
     }
     fn open(&mut self, args: &[String]) {
-        // println!("args: {:?}", args);
-        // if self.is_open() {
-        //     println!("Already connected to localhost, use close first.");
-        //     return;
-        // }
-        // if args.is_empty() {
-        //     print!("(to)");
-        //     io::stdout().flush().unwrap();
-        //     stdin().read_line(&mut self.hostname).expect("input ");
-        // } else {
-        //     self.hostname = args[0].clone();
-        // }
+        println!("args: {:?}", args);
+        if self.is_open() {
+            println!("Already connected to localhost, use close first.");
+            return;
+        }
+        if args.is_empty() {
+            print!("(to)");
+            io::stdout().flush().unwrap();
+            stdin().read_line(&mut self.hostname).expect("input ");
+        } else {
+            self.hostname = args[0].clone();
+        }
         self.user();
     }
     fn user(&mut self) {
-        // let mut username = String::new();
-        // let mut password = String::new();
         // print!("Name ({}:user):", self.hostname);
         // stdin().read_line(&mut username).unwrap();
         // print!("Password:");
@@ -129,57 +125,104 @@ impl LocalClient {
 
         let username = String::new();
         let password = String::new();
-        let addr = format!("127.0.0.1:8089");
-        self.cmd_conn = Some(Connection::connect(addr.as_str()));
+        let port = 8089;
+        let addr = format!("127.0.0.1:{}", port);
+        self.cmd_conn = Some(Connection::connect(&addr));
         self.login(username, password);
         self.binary();
     }
     fn login(&mut self, username: String, password: String) {
         if self.is_open() {}
-        let reply = self.send_cmd(format!("USER {}", username));
-        println!("reply: {}", reply);
-        // if reply.code == ResultCode::NeedPsw {
-        //     println!("{:?}", self.send_cmd(format!("PASS {}", password)));
-        // } else {
-        // }
+        let reply = self.send_cmd(&format!("USER {}", username)).unwrap();
+        if reply.code == ResultCode::NeedPsw {
+            let msg = format!("PASS {}", password);
+            self.send_cmd(&msg).unwrap();
+        }
     }
-    fn close(&mut self) {}
+    fn close(&mut self) {
+        self.send_cmd("CLOSE");
+        self.cmd_conn = None;
+        self.data_conn = None;
+    }
     fn is_open(&self) -> bool {
-        false
+        self.cmd_conn.is_some()
     }
-    fn send_cmd(&mut self, cmd: String) -> String {
+    fn list(&mut self, args: &[String]) {
+        // Example:
+        // 200 PORT command successful. Consider using PASV.
+        // 150 Here comes the directory listing.
+        // -rwxr-xr-x    1 0        0        21863760 Apr 03 20:09 miniftp
+        // 226 Directory send OK.
+        self.port();
+        let mut cmd = "LIST".to_string();
+        for s in args.iter() {
+            cmd.push(' ');
+            cmd.push_str(s)
+        }
+        self.send_cmd(&cmd);
+        let msg = self.receive_data();
+        println!("{}", String::from_utf8(msg).unwrap());
+    }
+    fn receive_data(&mut self) -> Vec<u8> {
+        if let Some(ref c) = self.data_conn {
+            // ugly function
+            c.read();
+            let msg = c.get_msg();
+            return msg;
+        }
+        Vec::new()
+    }
+
+    fn send_cmd(&mut self, cmd: &str) -> Option<Answer> {
         debug!("send msg: {}", cmd);
-        self.cmd_conn.as_mut().unwrap().send(cmd.as_bytes());
+        let mut buf = cmd.as_bytes().to_vec();
+        let msg = Vec::new();
+        self.codec.encode(buf, &mut msg).unwrap();
+        self.cmd_conn.as_mut().unwrap().send(&buf);
+        // FIXME: 这个read貌似有bug
         self.cmd_conn.as_mut().unwrap().read();
-        let buf = self.cmd_conn.as_mut().unwrap().get_msg();
-        String::from_utf8_lossy(&buf).to_string()
+        let mut msg = self.cmd_conn.as_mut().unwrap().get_msg();
+
+        let answer = self.codec.decode(&mut msg).unwrap();
+        if let Some(answer) = answer {
+            Some(answer)
+        }
+        answer
     }
+
     fn port(&mut self) {
         // TODO: check status code
         if let Some(c) = self.data_conn.clone() {
             c.shutdown();
             self.data_conn = None;
         }
-        // TODO file configure
-        let port = 2222u16;
+        // FIXME: a connection bug
+        // get current local connection {port}
+        let port = self.port + 1;
         let cmd = format!("PORT 127,0,0,1,{},{}", port >> 8, 0xFF & port);
-        self.send_cmd(cmd);
+        self.send_cmd(&cmd);
         let addr = format!("{}:{}", "127.0.0.1", port);
         let listener = TcpListener::bind(addr.as_str()).unwrap();
+        debug!("listener: {:?}", listener);
         let fd = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC).unwrap();
+        debug!("accept a new connection: {}", fd);
         setsockopt(fd, sockopt::TcpNoDelay, &true).unwrap();
         self.data_conn = Some(Connection::new(fd));
-        println!("data connection build success");
+        debug!("data connection build success");
     }
 
-    fn cd(&mut self) {}
+    fn cd(&mut self, path: &String) {
+        let msg = format!("CD {}", path);
+        self.send_cmd(&msg);
+    }
+
     fn stor(&mut self, path: &Path) {
         // TODO: check file position.
         // check connection
         // 上传文件的默认权限
         // 支持断点续传
         // 在服务端进行限速
-        self.send_cmd(format!("STOR {}", path.display()));
+        self.send_cmd(&format!("STOR {:?}", path.display()));
         if let Some(c) = self.data_conn.clone() {
             self.send_answer(Answer::new(
                 ResultCode::DataConnOpened,
@@ -210,16 +253,46 @@ impl LocalClient {
         // TODO
         true
     }
-    fn upload(&mut self) {}
-    fn get(&mut self) {}
-    fn del(&mut self) {}
+    fn get(&mut self, files: &Vec<String>) {
+        // local: miniftp remote: miniftp
+        // 200 PORT command successful. Consider using PASV.
+        // 150 Opening BINARY mode data connection for miniftp (21863760 bytes).
+        // 226 Transfer complete.
+        // 21863760 bytes received in 10.59 secs (1.9698 MB/s)
+
+        let mut total_size = 0usize;
+        let start = Instant::now();
+        if let Some(ref c) = self.data_conn {
+            for file in files.iter() {
+                self.send_cmd(&format!("STOR {}", file));
+                self.receive_data();
+            }
+        }
+        let duration = start.elapsed();
+        let rate = total_size as f64 / 1024f64 / 1024f64 / duration.as_secs_f64();
+
+        println!(
+            "{} bytes received in {} secs ({} MB/s)",
+            total_size, duration, rate
+        );
+    }
+    fn put(&self, files: &Vec<String>) {
+        // local: miniftp remote: miniftp
+        // 200 PORT command successful. Consider using PASV.
+        // 150 Opening BINARY mode data connection for miniftp (21863760 bytes).
+        // 226 Transfer complete.
+        // 21863760 bytes received in 10.59 secs (1.9698 MB/s)
+    }
+    fn delete(&mut self) {}
     fn binary(&mut self) {
-        self.send_cmd(String::from("TYPE I"));
+        self.send_cmd("TYPE I");
     }
     fn size(&mut self) {}
     fn stat(&mut self) {}
     fn syst(&mut self) {}
-    fn noop(&mut self) {}
+    fn noop(&mut self) {
+        self.send_cmd("NOOP");
+    }
     fn help(&mut self) {
         print!(
             "List of ftp commands:\n
@@ -242,6 +315,9 @@ impl LocalClient {
       help - print list of ftp commands\n
       exit - exit program\n"
         );
+    }
+    fn abort(&self) {
+        self.send_cmd("ABOR")
     }
     fn exit(&mut self) {
         if self.is_open() {

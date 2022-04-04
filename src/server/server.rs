@@ -1,11 +1,9 @@
+use crate::handler::session::Session;
 use crate::net::connection::{ConnRef, Connection, State};
 use crate::net::event_loop::{EventLoop, Handler, Token};
 use crate::net::queue::{BlockingQueue, BlockingQueueRef};
 use crate::threadpool::threadpool::ThreadPool;
-use crate::{
-    handler::session::Session,
-    utils::config::{Config, DEFAULT_CONF_FILE},
-};
+use crate::utils::config::{Config, DEFAULT_CONF_FILE};
 use log::{debug, info};
 use nix::fcntl::{flock, open, FlockArg, OFlag};
 use nix::libc::exit;
@@ -145,7 +143,7 @@ impl Handler for FtpServer {
             }
         }
     }
-    fn notify(&mut self, event_loop: &mut EventLoop, token: Token, revents: EpollFlags) {}
+    fn notify(&mut self, _event_loop: &mut EventLoop, _token: Token, _revents: EpollFlags) {}
 }
 
 pub fn run_server() {

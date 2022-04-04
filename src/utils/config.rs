@@ -21,7 +21,7 @@ pub struct Config {
     pub ssl_enable: bool,
     pub rsa_cert_file: Option<String>,
     pub rsa_private_key_file: Option<String>,
-    pub admin: Option<User>,
+    pub admin: Option<String>,
     pub users: Users,
 }
 
@@ -50,7 +50,7 @@ impl Config {
                 ssl_enable: false,
                 rsa_cert_file: None,
                 rsa_private_key_file: None,
-                admin: Some((String::new(), String::new())),
+                admin: Some(String::new()),
                 users: HashMap::from([("anonymous".to_string(), "".to_string())]),
             };
 

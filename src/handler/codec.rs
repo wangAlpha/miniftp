@@ -1,19 +1,18 @@
-use super::cmd::{Answer, Command};
-use super::error::Error;
-use bytes::BytesMut;
+use crate::handler::cmd::{Answer, Command};
+use crate::handler::error::Error;
 use std::io::{self, Write};
-
-#[derive(Debug, Clone, Copy)]
-pub struct BytesCodec;
 
 #[derive(Debug, Clone, Copy)]
 pub struct FtpCodec;
 
+#[derive(Debug, Clone, Copy)]
+pub struct BytesCodec;
+
 pub trait Decoder {
     type Item;
     type Error: From<io::Error>;
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error>;
-    fn decode_eof(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+    fn decode(&mut self, src: &mut Vec<u8>) -> Result<Option<Self::Item>, Self::Error>;
+    fn decode_eof(&mut self, buf: &mut Vec<u8>) -> Result<Option<Self::Item>, Self::Error> {
         match self.decode(buf)? {
             Some(frame) => Ok(Some(frame)),
             None => {
@@ -29,16 +28,15 @@ pub trait Decoder {
 pub trait Encoder {
     type Item;
     type Error: From<io::Error>;
-    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error>;
+    fn encode(&mut self, item: Self::Item, dst: &mut Vec<u8>) -> Result<(), Self::Error>;
 }
 
 impl Decoder for FtpCodec {
     type Item = Command;
     type Error = io::Error;
-    fn decode(&mut self, buf: &mut BytesMut) -> io::Result<Option<Command>> {
+    fn decode(&mut self, buf: &mut Vec<u8>) -> io::Result<Option<Command>> {
         if let Some(index) = find_crlf(buf) {
-            let line = buf.split_to(index);
-            buf.split_to(2); // Remove \r\n
+            let (_, line) = buf.split_at(index); // Remove \r\n
             Command::new(line.to_vec())
                 .map(|cmd| Some(cmd))
                 .map_err(Error::to_io_error)
@@ -51,8 +49,7 @@ impl Decoder for FtpCodec {
 impl Encoder for FtpCodec {
     type Item = Answer;
     type Error = io::Error;
-
-    fn encode(&mut self, answear: Answer, buf: &mut BytesMut) -> io::Result<()> {
+    fn encode(&mut self, answear: Answer, buf: &mut Vec<u8>) -> io::Result<()> {
         let mut buffer = vec![];
         if answear.message.is_empty() {
             write!(buffer, "{}\r\n", answear.code as u32)?;
@@ -68,16 +65,30 @@ impl Decoder for BytesCodec {
     type Item = Vec<u8>;
     type Error = io::Error;
 
-    fn decode(&mut self, buf: &mut BytesMut) -> io::Result<Option<Vec<u8>>> {
+    fn decode(&mut self, buf: &mut Vec<u8>) -> io::Result<Option<Vec<u8>>> {
         if buf.len() == 0 {
             return Ok(None);
         }
-        let data = buf.to_vec();
-        buf.clear();
-        Ok(Some(data))
+        if let Some(index) = find_crlf(buf) {
+            let (_, line) = buf.split_at(index);
+            Ok(Some(line.to_vec()))
+        } else {
+            Ok(None)
+        }
     }
 }
-pub fn find_crlf(buf: &mut BytesMut) -> Option<usize> {
+
+impl Encoder for BytesCodec {
+    type Item = Vec<u8>;
+    type Error = io::Error;
+    fn encode(&mut self, item: Self::Item, buf: &mut Vec<u8>) -> io::Result<()> {
+        buf.extend(item);
+        buf.extend(b"\r\n");
+        Ok(())
+    }
+}
+
+pub fn find_crlf(buf: &mut Vec<u8>) -> Option<usize> {
     buf.windows(2).position(|bytes| bytes == b"\r\n")
 }
 
@@ -86,11 +97,30 @@ mod tests {
     use crate::handler::cmd::ResultCode;
 
     use super::*;
-    use std::path::PathBuf;
-    // #[test]
-    // fn test_encoder() {
-    //     let mut codec = FtpCodec;
-    //     let mut message = "bad sequence of commands";
-    //     let answer = Answer::new(ResultCode)
-    // }
+    #[test]
+    fn test_encoder() {
+        let mut codec = FtpCodec;
+        let mut message = "bad sequence of commands";
+        let answer = Answer::new(ResultCode::BadCmdSeq, message);
+
+        let mut out = Vec::new();
+        let result = "bad sequence of commands\r\n".as_bytes().to_vec();
+
+        codec.encode(answer, &mut out).unwrap();
+        assert_eq!(answer.code, ResultCode::BadCmdSeq);
+        assert_eq!(out, result);
+    }
+    #[test]
+    fn test_decoder() {
+        let mut codec = FtpCodec;
+        let mut message = "bad sequence of commands";
+        let answer = Answer::new(ResultCode::BadCmdSeq, message);
+
+        let mut out = Vec::new();
+        codec.encode(answer, &mut out).unwrap();
+
+        // let result = codec.decode(&mut out).unwrap().unwrap();
+        // assert_eq!(result, answer.code);
+        // assert_eq!(answer.message, result.message);
+    }
 }
