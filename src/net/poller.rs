@@ -19,9 +19,9 @@ impl Poller {
         let events = vec![EpollEvent::new(EpollFlags::empty(), 0); EVENT_SIZE];
         Poller { events, poll_fd }
     }
-    pub fn register(&mut self, listen_fd: i32, interest: EpollFlags) {
-        let mut event = EpollEvent::new(interest, listen_fd as u64);
-        epoll_ctl(self.poll_fd, EpollOp::EpollCtlAdd, listen_fd, &mut event).unwrap();
+    pub fn register(&mut self, fd: i32, interest: EpollFlags) {
+        let mut event = EpollEvent::new(interest, fd as u64);
+        epoll_ctl(self.poll_fd, EpollOp::EpollCtlAdd, fd, &mut event).unwrap();
     }
     pub fn poll(&mut self) -> usize {
         let num_events = epoll_wait(self.poll_fd, &mut self.events, -1).unwrap();

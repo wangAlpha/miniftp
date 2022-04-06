@@ -1,15 +1,21 @@
 use super::event_loop::EventLoop;
 use log::{debug, warn};
 use nix::errno::Errno;
+use nix::fcntl::{open, OFlag};
+// use nix::libc::{c_int, getpeername, sockaddr, sockaddr_storage, socklen_t, AF_INET};
 use nix::sys::epoll::EpollFlags;
+use nix::sys::sendfile::sendfile;
 use nix::sys::socket::{accept4, connect, setsockopt, sockopt};
-use nix::sys::socket::{getpeername, shutdown, socket, Shutdown};
+use nix::sys::socket::{shutdown, socket, Shutdown};
 use nix::sys::socket::{AddressFamily, InetAddr, SockAddr, SockFlag, SockProtocol, SockType};
+use nix::sys::stat::fstat;
+use nix::sys::stat::Mode;
 use nix::unistd::{read, write};
 use std::net::{SocketAddr, TcpListener};
 use std::os::unix::prelude::AsRawFd;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 pub type ConnRef = Arc<Mutex<Connection>>;
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
@@ -55,15 +61,22 @@ pub struct Connection {
     state: State,
     write_buf: Vec<u8>,
     read_buf: Vec<u8>,
+    local_addr: String,
+    peer_addr: String,
 }
 
 impl Connection {
     pub fn new(fd: i32) -> Self {
+        assert!(fd > 0);
+        let local_addr = format!("{}", getsockname(fd).unwrap());
+        let peer_addr = format!("{}", getpeername(fd).unwrap());
         Connection {
             fd,
             state: State::Ready,
             write_buf: Vec::new(),
             read_buf: Vec::new(),
+            local_addr,
+            peer_addr,
         }
     }
     pub fn bind(addr: &str) -> (i32, TcpListener) {
@@ -98,7 +111,12 @@ impl Connection {
     pub fn connected(&self) -> bool {
         self.state != State::Closed
     }
-
+    pub fn get_peer_addr(&self) -> String {
+        self.peer_addr
+    }
+    pub fn get_local_addr(&self) -> String {
+        self.local_addr
+    }
     pub fn dispatch(&mut self, revents: EpollFlags) -> State {
         self.state = State::Ready;
         if revents.is_readable() {
@@ -147,6 +165,12 @@ impl Connection {
             Err(e) => warn!("Shutdown {} occur {} error", self.fd, e),
         }
     }
+    pub fn send_file(&mut self, file: &str) -> Option<usize> {
+        let fd = open(file, OFlag::O_RDWR, Mode::S_IRUSR).unwrap();
+        let stat = fstat(fd).unwrap();
+        let size = sendfile(self.fd, fd, None, stat.st_size as usize).unwrap();
+        Some(size)
+    }
     pub fn send(&mut self, buf: &[u8]) {
         match write(self.fd, buf) {
             Ok(_) => (),
@@ -161,10 +185,11 @@ impl Connection {
         // TODO:
         // write(self.fd, &data).unwrap();
     }
-    pub fn get_peer_address(&self) -> SockAddr {
-        let addr = getpeername(self.fd).expect("get peer socket address failed");
-        addr
-    }
+    // pub fn get_peer_address(&self) -> SockAddr {
+    // let addr = getpeername(self.fd).expect("get peer socket address failed");
+    // addr
+    // SockAddr::Inet(InetAddr::V4(sockaddr_in)));
+    // }
     pub fn read(&mut self) {
         let mut buf = [0u8; 4 * 1024];
         while self.state != State::Finished && self.state != State::Closed {

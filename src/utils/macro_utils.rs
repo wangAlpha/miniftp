@@ -4,5 +4,3 @@ macro_rules! bits {
         ($expression).bits() > 0
     };
 }
-
-// TODO: some file type compare

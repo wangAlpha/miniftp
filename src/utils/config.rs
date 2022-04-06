@@ -13,8 +13,8 @@ pub type Users = HashMap<String, String>;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Config {
-    pub server_addr: Option<String>,
-    pub server_port: Option<u16>,
+    pub server_addr: String,
+    pub server_port: u16,
     pub pasv_enable: bool,
     pub pasv_port: Vec<u16>,
     pub max_clients: usize,
@@ -42,8 +42,8 @@ impl Config {
                 DEFAULT_CONF_FILE
             );
             let config = Config {
-                server_addr: Some(String::from_str("0.0.0.0").unwrap()),
-                server_port: Some(8089),
+                server_addr: String::from_str("0.0.0.0").unwrap(),
+                server_port: 8089u16,
                 pasv_enable: true,
                 pasv_port: vec![2222, 2222],
                 max_clients: 0,

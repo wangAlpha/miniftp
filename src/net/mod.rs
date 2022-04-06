@@ -12,3 +12,6 @@ pub mod queue;
 
 #[allow(dead_code)]
 pub mod event_loop;
+
+#[allow(dead_code)]
+pub mod sorted_list;

@@ -15,7 +15,6 @@ type Job = Box<dyn FnOnce() + Send + 'static>;
 
 impl ThreadPool {
     pub fn new(size: usize) -> ThreadPool {
-        // assert!(size > 0);
         let size = if size > 0 { size } else { num_cpus::get() };
 
         let (sender, receiver) = mpsc::channel();
@@ -36,6 +35,10 @@ impl ThreadPool {
         let job = Box::new(f);
 
         self.sender.send(Message::NewJob(job)).unwrap();
+    }
+
+    pub fn len(&self) -> usize {
+        self.workers.len()
     }
 }
 

@@ -34,7 +34,7 @@ pub trait Encoder {
 impl Decoder for FtpCodec {
     type Item = Command;
     type Error = io::Error;
-    fn decode(&mut self, buf: &mut Vec<u8>) -> io::Result<Option<Command>> {
+    fn decode(&mut self, buf: &mut Vec<u8>) -> Result<Option<Self::Item>, Self::Error> {
         if let Some(index) = find_crlf(buf) {
             let (_, line) = buf.split_at(index); // Remove \r\n
             Command::new(line.to_vec())
@@ -62,16 +62,18 @@ impl Encoder for FtpCodec {
 }
 
 impl Decoder for BytesCodec {
-    type Item = Vec<u8>;
+    type Item = Answer;
     type Error = io::Error;
 
-    fn decode(&mut self, buf: &mut Vec<u8>) -> io::Result<Option<Vec<u8>>> {
+    fn decode(&mut self, buf: &mut Vec<u8>) -> Result<Option<Self::Item>, Self::Error> {
         if buf.len() == 0 {
             return Ok(None);
         }
         if let Some(index) = find_crlf(buf) {
             let (_, line) = buf.split_at(index);
-            Ok(Some(line.to_vec()))
+            return Ok(Some(Answer::from(
+                &String::from_utf8(line.to_vec()).unwrap(),
+            )));
         } else {
             Ok(None)
         }

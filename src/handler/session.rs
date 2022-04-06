@@ -1,9 +1,10 @@
 use crate::handler::cmd::*;
 use crate::handler::codec::FtpCodec;
-use crate::net::connection::{ConnRef, Connection, State};
+use crate::net::connection::{ConnRef, Connection};
 use crate::net::event_loop::EventLoop;
 use crate::server::local_client::*;
 use crate::utils::config::Config;
+use crate::utils::utils::is_regular;
 use chrono::prelude::*;
 use log::{debug, info, warn};
 use nix::dir::{Dir, Type};
@@ -329,8 +330,7 @@ impl Session {
     fn retr(&mut self, path: PathBuf) {
         if self.data_conn.is_some() {
             let path = self.cwd.join(path);
-            // ugly module
-            if is_regular(&path.as_path()) && self.is_admin {
+            if is_regular(path.to_str().unwrap()) && self.is_admin {
                 self.send_answer(Answer::new(
                     ResultCode::DataConnOpened,
                     "Starting to send file...",
@@ -388,7 +388,12 @@ impl Session {
         }
     }
 
-    pub fn receive_data(&mut self, msg: Vec<u8>, conn: &Arc<Mutex<Connection>>) {
+    pub fn receive_data(
+        &mut self,
+        msg: Vec<u8>,
+        conn: &Arc<Mutex<Connection>>,
+        conn_map: &mut Arc<Mutex<HashMap<i32, i32>>>,
+    ) {
         debug!(
             "receive_data: {}, conn: {}",
             msg.len(),
@@ -397,12 +402,20 @@ impl Session {
         if let Some(context) = &self.curr_file_context {
             let buf = msg.as_slice();
             write(context.0, buf).unwrap();
-            let s = conn.lock().unwrap().get_state();
-            debug!("After receive data conn state: {:?}", s);
-            if s == State::Finished || s == State::Closed {
+            let conn = conn.lock().unwrap();
+            let fd = conn.get_fd();
+            let connected = if conn.connected() { "UP" } else { "DOWN" };
+            debug!(
+                "{} -> {} is {}",
+                conn.get_peer_addr(),
+                conn.get_local_addr(),
+                connected,
+            );
+            if !conn.connected() {
                 close(context.0).unwrap();
                 self.curr_file_context = None;
                 self.send_answer(Answer::new(ResultCode::ConnClose, "Transfer done"));
+                conn_map.lock().unwrap().remove(&fd);
                 info!("Transfer done!");
             }
         } else {

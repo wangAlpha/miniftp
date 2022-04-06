@@ -2,17 +2,18 @@ use crate::handler::cmd::{Answer, ResultCode};
 use crate::handler::codec::{BytesCodec, Decoder, Encoder};
 use crate::net::connection::Connection;
 use crate::server::record_lock::FileLock;
+use crate::utils::utils::is_regular;
 use log::{debug, info, warn};
 use nix::fcntl::{open, OFlag};
 use nix::sys::sendfile::sendfile;
 use nix::sys::socket::{accept4, setsockopt, sockopt, SockFlag};
-use nix::sys::stat::{lstat, Mode, SFlag};
+use nix::sys::stat::{lstat, Mode};
 use std::io::{self, stdin, Write};
 use std::net::TcpListener;
 use std::os::unix::prelude::AsRawFd;
 use std::path::Path;
 use std::str::FromStr;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 #[derive(Debug)]
 pub struct LocalClient {
@@ -89,7 +90,7 @@ impl LocalClient {
             b"PWD" => self.pwd(),
             // b"MKDIR" => self.mkdir(),
             // b"RMDIR" => self.rmdir(),
-            b"DEL" => self.delete(args),
+            b"DEL" => self.delete(&args),
             b"STAT" => self.stat(),
             b"SYST" => self.syst(),
             b"BINARY" => self.binary(),
@@ -102,7 +103,7 @@ impl LocalClient {
         };
         String::from("_")
     }
-    fn open(&mut self, args: &[String]) {
+    fn open(&mut self, args: &Vec<String>) {
         println!("args: {:?}", args);
         if self.is_open() {
             println!("Already connected to localhost, use close first.");
@@ -114,6 +115,15 @@ impl LocalClient {
             stdin().read_line(&mut self.hostname).expect("input ");
         } else {
             self.hostname = args[0].clone();
+            if args.len() >= 2 {
+                match args[1].parse::<u16>() {
+                    Ok(port) => self.port = port,
+                    Err(_) => {
+                        info!("usage: open host-name [port]");
+                        return;
+                    }
+                }
+            }
         }
         self.user();
     }
@@ -147,6 +157,9 @@ impl LocalClient {
     fn is_open(&self) -> bool {
         self.cmd_conn.is_some()
     }
+    fn pwd(&self) {
+        self.send_cmd("PWD");
+    }
     fn list(&mut self, args: &[String]) {
         // Example:
         // 200 PORT command successful. Consider using PASV.
@@ -173,6 +186,13 @@ impl LocalClient {
         Vec::new()
     }
 
+    fn send_file(&mut self, file: &str) -> usize {
+        if let Some(ref c) = self.data_conn {
+            return c.send_file(file).unwrap_or(0);
+        }
+        0
+    }
+
     fn send_cmd(&mut self, cmd: &str) -> Option<Answer> {
         debug!("send msg: {}", cmd);
         let mut buf = cmd.as_bytes().to_vec();
@@ -186,8 +206,9 @@ impl LocalClient {
         let answer = self.codec.decode(&mut msg).unwrap();
         if let Some(answer) = answer {
             Some(answer)
+        } else {
+            None
         }
-        answer
     }
 
     fn port(&mut self) {
@@ -232,7 +253,7 @@ impl LocalClient {
             let lock = FileLock::new(fd);
             lock.lock(false);
 
-            if is_regular(path) {
+            if is_regular(path.to_str().unwrap()) {
                 let len = get_file_size(path);
                 let len = sendfile(c.get_fd(), fd, None, len).unwrap();
                 debug!("-> file: {:?} transfer done! size: {}", path, len);
@@ -264,32 +285,65 @@ impl LocalClient {
         let start = Instant::now();
         if let Some(ref c) = self.data_conn {
             for file in files.iter() {
-                self.send_cmd(&format!("STOR {}", file));
+                let answer = self.send_cmd(&format!("RETR {}", file)).unwrap();
+                // if answer.code =
+                // 用正则表
                 self.receive_data();
             }
         }
         let duration = start.elapsed();
         let rate = total_size as f64 / 1024f64 / 1024f64 / duration.as_secs_f64();
-
+        self.receive_answer();
         println!(
             "{} bytes received in {} secs ({} MB/s)",
-            total_size, duration, rate
+            total_size,
+            duration.as_secs_f32(),
+            rate
         );
     }
+    fn receive_answer(&self) {}
     fn put(&self, files: &Vec<String>) {
         // local: miniftp remote: miniftp
         // 200 PORT command successful. Consider using PASV.
         // 150 Opening BINARY mode data connection for miniftp (21863760 bytes).
         // 226 Transfer complete.
         // 21863760 bytes received in 10.59 secs (1.9698 MB/s)
+
+        self.port();
+        self.binary();
+        let mut total_size = 0usize;
+        let start = Instant::now();
+        if let Some(ref c) = self.data_conn {
+            for file in files.iter() {
+                if let Some(answer) = self.send_cmd(&format!("STOR {}", file)) {
+                    if answer.code != ResultCode::DataConnOpened && answer.code != ResultCode::Ok {
+                        total_size += self.send_file(file);
+                    }
+                }
+            }
+        }
+        let duration = start.elapsed();
+        let rate = total_size as f64 / 1024f64 / 1024f64 / duration.as_secs_f64();
+        println!(
+            "{} bytes received in {} secs ({} MB/s)",
+            total_size,
+            duration.as_secs_f32(),
+            rate
+        );
     }
-    fn delete(&mut self) {}
+    fn delete(&mut self, files: &Vec<String>) {
+        files.iter().for_each(|f| {
+            self.send_cmd(&format!("DELE {}", f));
+        });
+    }
     fn binary(&mut self) {
         self.send_cmd("TYPE I");
     }
     fn size(&mut self) {}
     fn stat(&mut self) {}
-    fn syst(&mut self) {}
+    fn syst(&mut self) {
+        self.send_cmd("SYST");
+    }
     fn noop(&mut self) {
         self.send_cmd("NOOP");
     }
@@ -316,8 +370,8 @@ impl LocalClient {
       exit - exit program\n"
         );
     }
-    fn abort(&self) {
-        self.send_cmd("ABOR")
+    fn abort(&mut self) {
+        self.send_cmd("ABOR");
     }
     fn exit(&mut self) {
         if self.is_open() {
@@ -327,16 +381,6 @@ impl LocalClient {
             self.data_conn = None;
         }
         self.quit = true;
-    }
-}
-
-pub fn is_regular(path: &Path) -> bool {
-    match lstat(path) {
-        Ok(stat) => SFlag::S_IFREG.bits() & stat.st_mode == SFlag::S_IFREG.bits(),
-        Err(e) => {
-            warn!("Can't get path {:?} state, {}", path, e);
-            false
-        }
     }
 }
 

@@ -1,6 +1,8 @@
 use super::poller::Poller;
 use nix::sys::epoll::{EpollEvent, EpollFlags, EpollOp};
-use std::collections::{HashMap, HashSet};
+use nix::sys::time::{TimeSpec, TimeValLike};
+use nix::sys::timerfd::{ClockId, Expiration, TimerFd, TimerFlags, TimerSetTimeFlags};
+use std::collections::HashMap;
 use std::net::TcpListener;
 use std::os::unix::prelude::AsRawFd;
 use std::sync::{Arc, Mutex};
@@ -9,11 +11,13 @@ pub const EVENT_LEVEL: EpollFlags = EpollFlags::EPOLLET;
 pub const EVENT_READ: EpollFlags = EpollFlags::EPOLLIN;
 pub const EVENT_ERR: EpollFlags = EpollFlags::EPOLLERR;
 pub const EVENT_HUP: EpollFlags = EpollFlags::EPOLLHUP;
+pub const EVENT_WRIT: EpollFlags = EpollFlags::EPOLLOUT;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Token {
     Listen(i32),
-    Read(i32),
+    Notify(i32),
+    Timer(i32),
 }
 
 pub trait Handler: Sized {
@@ -26,8 +30,8 @@ pub trait Handler: Sized {
 #[derive(Debug, Clone)]
 pub struct EventLoop {
     listener: Arc<TcpListener>,
-    data_listener: Arc<Mutex<HashMap<i32, TcpListener>>>,
-    data_conn: Arc<Mutex<HashSet<i32>>>,
+    listeners: Arc<Mutex<HashMap<i32, TcpListener>>>,
+    timers: Arc<Mutex<HashMap<i32, TimerFd>>>,
     poller: Poller,
     run: bool,
 }
@@ -35,36 +39,25 @@ pub struct EventLoop {
 impl EventLoop {
     pub fn new(listener: TcpListener) -> Self {
         let mut poller = Poller::new();
-        let interest = EpollFlags::EPOLLHUP
-            | EpollFlags::EPOLLERR
-            | EpollFlags::EPOLLIN
-            | EpollFlags::EPOLLOUT
-            | EpollFlags::EPOLLET;
+        let interest = EVENT_HUP | EVENT_ERR | EVENT_WRIT | EVENT_READ | EVENT_LEVEL;
         poller.register(listener.as_raw_fd(), interest);
         EventLoop {
             listener: Arc::new(listener),
-            data_listener: Arc::new(Mutex::new(HashMap::new())),
+            listeners: Arc::new(Mutex::new(HashMap::new())),
+            timers: Arc::new(Mutex::new(HashMap::new())),
             run: true,
             poller,
-            data_conn: Arc::new(Mutex::new(HashSet::new())),
         }
     }
     pub fn register(&mut self, listener: TcpListener, interest: EpollFlags) {
         let fd = listener.as_raw_fd();
-        self.data_listener.lock().unwrap().insert(fd, listener);
+        self.listeners.lock().unwrap().insert(fd, listener);
         self.poller.register(fd, interest);
-    }
-    pub fn is_data_conn(&self, fd: i32) -> bool {
-        self.data_listener.lock().unwrap().contains_key(&fd)
     }
     pub fn register_listen(&mut self, listener: TcpListener) {
         self.register(
             listener,
-            EpollFlags::EPOLLHUP
-                | EpollFlags::EPOLLERR
-                | EpollFlags::EPOLLIN
-                | EpollFlags::EPOLLOUT
-                | EpollFlags::EPOLLET,
+            EVENT_HUP | EVENT_ERR | EVENT_WRIT | EVENT_READ | EVENT_LEVEL,
         );
     }
     pub fn reregister(&self, fd: i32, interest: EpollFlags) {
@@ -75,8 +68,37 @@ impl EventLoop {
     pub fn deregister(&self, fd: i32) {
         self.poller.update(EpollOp::EpollCtlDel, fd, &mut None);
     }
-    pub fn is_new_conn(&self, fd: i32) -> bool {
-        self.listener.as_raw_fd() == fd || self.data_listener.lock().unwrap().contains_key(&fd)
+    fn is_listen_event(&self, fd: i32) -> bool {
+        self.listener.as_raw_fd() == fd || self.listeners.lock().unwrap().contains_key(&fd)
+    }
+    fn is_timer_event(&self, fd: i32) ->bool {
+        self.timers.lock().unwrap().contains_key(&fd)
+    }
+    pub fn add_timer<F>(&mut self, interval: i64, f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        // self.poller.registe, interest)
+        let timer_fd = TimerFd::new(
+            ClockId::CLOCK_MONOTONIC,
+            TimerFlags::TFD_CLOEXEC | TimerFlags::TFD_NONBLOCK,
+        )
+        .unwrap();
+
+        timer_fd
+            .set(
+                Expiration::IntervalDelayed(
+                    TimeSpec::seconds(interval),
+                    TimeSpec::seconds(interval),
+                ),
+                TimerSetTimeFlags::empty(),
+            )
+            .unwrap();
+        self.poller.register(timer_fd.as_raw_fd(), EVENT_READ);
+        self.timers
+            .lock()
+            .unwrap()
+            .insert(timer_fd.as_raw_fd(), timer_fd);
     }
     pub fn run<H>(&mut self, handler: &mut H)
     where
@@ -84,23 +106,31 @@ impl EventLoop {
     {
         while self.run {
             let cnt = self.poller.poll();
-            // io ready event: connection
+            let mut ready_channels = Vec::new();
+            let mut notify_channels = Vec::new();
+            let mut timer_channels = Vec::new();
             for i in 0..cnt {
                 let (fd, event) = self.poller.event(i);
-                let token = if fd == self.listener.as_raw_fd() {
-                    Token::Listen(fd)
-                } else if self.data_listener.lock().unwrap().contains_key(&fd) {
-                    Token::Listen(fd)
+                if self.is_listen_event(fd) {
+                    ready_channels.push((Token::Listen(fd), event));
+                } else if self.is_timer_event(fd) {
+                    timer_channels.push((Token::Timer(fd), event));
                 } else {
-                    Token::Read(fd)
+                    notify_channels.push((Token::Notify(fd), event));
                 };
+            }
+            // io ready event: listen event
+            for &(token, event) in ready_channels.iter() {
                 handler.ready(self, token, event.events());
             }
             // io read and write event
-            // for i in 0..cnt {
-            //     let (fd, event) = self.poller.event(i);
-            //     handler.notify(self, token, event.events());
-            // }
+            for &(token, event) in notify_channels.iter() {
+                handler.notify(self, token, event.events());
+            }
+            let mut _buf = [0u8; 8];
+            for &(token, event) in timer_channels.iter() {
+                handler.notify(self, token, event.events());
+            }
         }
     }
 }

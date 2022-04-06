@@ -8,6 +8,7 @@ pub struct Answer {
     pub code: ResultCode,
     pub message: String,
 }
+
 impl Answer {
     pub fn new(code: ResultCode, message: &str) -> Self {
         Answer {
@@ -15,14 +16,11 @@ impl Answer {
             message: message.to_string(),
         }
     }
-    // pub fn as_bytes(&self) -> &[u8] {
-    //     let s = String::new();
-    //     let bytes = s.as_bytes
-    //     // format!("{} \r\n")
-    // }
-    // pub fn from(msg: &mut String) -> Answer {
-    //     // ^[0-9]{2,5}
-    // }
+    pub fn from(buf: &str) -> Self {
+        let code = ResultCode::BadCmdSeq;
+        let message = String::new();
+        Answer { code, message }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -30,6 +28,7 @@ pub enum Command {
     Auth,
     Cwd(PathBuf),
     List(Option<PathBuf>),
+    NList(Option<PathBuf>),
     Mkd(PathBuf),
     NoOp,
     Port(u16),
@@ -63,6 +62,7 @@ impl From<u8> for TransferType {
         }
     }
 }
+
 impl AsRef<str> for Command {
     fn as_ref(&self) -> &str {
         match *self {
@@ -70,6 +70,7 @@ impl AsRef<str> for Command {
             Command::Cwd(_) => "CWD",
             Command::Pass(_) => "PASS",
             Command::List(_) => "LIST",
+            Command::NList(_) => "NLIST",
             Command::Mkd(_) => "MKD",
             Command::NoOp => "NOOP",
             Command::Port(_) => "PORT",
@@ -117,6 +118,9 @@ impl Command {
             b"RETR" => Command::Retr(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
             b"STOR" => Command::Stor(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
             b"LIST" => Command::List(Some(PathBuf::from(
+                String::from_utf8_lossy(data?).to_string(),
+            ))),
+            b"NLIST" => Command::NList(Some(PathBuf::from(
                 String::from_utf8_lossy(data?).to_string(),
             ))),
             b"PORT" => extract_port(data?).unwrap(),
