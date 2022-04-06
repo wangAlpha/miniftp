@@ -1,10 +1,10 @@
 use log::debug;
 use serde::Deserialize;
 use serde::Serialize;
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::str::FromStr;
+use std::{collections::HashMap, io::Write};
 
 pub const DEFAULT_PORT: u16 = 8089;
 pub const DEFAULT_CONF_FILE: &'static str = "config.yaml";
@@ -26,10 +26,14 @@ pub struct Config {
 }
 
 pub fn get_content(path: &str) -> Option<String> {
-    let mut file = File::open(path).unwrap();
-    let mut content = String::new();
-    file.read_to_string(&mut content).ok()?;
-    Some(content)
+    match File::open(path) {
+        Ok(mut file) => {
+            let mut content = String::new();
+            file.read_to_string(&mut content).ok()?;
+            Some(content)
+        }
+        Err(_) => None,
+    }
 }
 
 impl Config {
@@ -55,7 +59,8 @@ impl Config {
             };
 
             let content = serde_yaml::to_string(&config).expect("serialization failed");
-            let file = File::create(DEFAULT_CONF_FILE).expect("couldn't create file...");
+            let mut file = File::create(DEFAULT_CONF_FILE).expect("couldn't create file...");
+            file.write_all(content.as_bytes()).unwrap();
             debug!("{}", content);
             config
         }

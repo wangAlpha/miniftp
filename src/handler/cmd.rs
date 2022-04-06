@@ -1,5 +1,8 @@
 use super::error::{Error, Result};
+use enum_primitive_derive::Primitive;
 use log::debug;
+use num_traits::{FromPrimitive, ToPrimitive};
+use regex::Regex;
 use std::path::PathBuf;
 use std::str::{self, FromStr};
 
@@ -16,10 +19,16 @@ impl Answer {
             message: message.to_string(),
         }
     }
-    pub fn from(buf: &str) -> Self {
-        let code = ResultCode::BadCmdSeq;
-        let message = String::new();
-        Answer { code, message }
+    pub fn from(buf: &str) -> Option<Self> {
+        let s = buf.to_string();
+        if let Some(index) = s.find(b' ') {
+            if index < 7 {
+                let (code, message) = s.split_at(index + 1);
+                let code = ResultCode::from_i32(code.parse::<i32>().unwrap());
+                return Some(Answer::new(code, message));
+            }
+        }
+        None
     }
 }
 
@@ -166,7 +175,7 @@ pub fn extract_port(data: &[u8]) -> Result<Command> {
     Ok(Command::Port(port))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Primitive)]
 pub enum ResultCode {
     Series = 100,
     RestartMakerReplay = 110,

@@ -102,7 +102,7 @@ impl Session {
                     self.stor(path);
                 }
                 Command::CdUp => {
-                    let path = self.cwd.as_path();
+                    // let path = self.cwd.as_path();
                     // TODO: Cd pathbuf
                     // self.cwd = chdir(path).unwrap();
                     // get_path
@@ -115,12 +115,11 @@ impl Session {
             }
         } else if self.name.is_some() && self.waiting_password {
             if let Command::Pass(content) = cmd {
-                let mut ok = false;
-                if self.is_admin {
-                    ok = content.eq(&self.config.admin.clone().unwrap());
+                let ok = if self.is_admin {
+                    content.eq(&self.config.admin.clone().unwrap())
                 } else {
-                    ok = self.config.users[&(self.name.clone().unwrap())] == content;
-                }
+                    content.eq(&self.config.users[&(self.name.clone().unwrap())])
+                };
                 if ok {
                     self.waiting_password = false;
                     self.send_answer(Answer::new(
@@ -161,7 +160,7 @@ impl Session {
                                     self.config.users[&(content.clone())].is_empty() == false
                             }
                         }
-                        if name.is_none() {
+                        if self.name.is_none() {
                             self.send_answer(Answer::new(ResultCode::NotLogin, "Unknown user..."));
                         } else {
                             self.name = name.clone();
@@ -182,10 +181,10 @@ impl Session {
                                     "ascii"
                                 };
                                 let welcome = format!(
-                                    "Login successful.\r\n
-                                Welcome {}\r\n
-                                Remote system type is UNIX.\r\n
-                                Using {} mode to transfer files.\r\n",
+                                    "Login successful.\n
+                                Welcome {}\n
+                                Remote system type is UNIX.\n
+                                Using {} mode to transfer files.\n",
                                     typ,
                                     name.unwrap().clone()
                                 );
@@ -202,7 +201,7 @@ impl Session {
                     } else {
                         "BINARY"
                     };
-                    let msg = format!("Using {} mode to transfer files.", mode);
+                    let msg = format!("Opening {} mode to transfer files.", mode);
                     self.send_answer(Answer::new(ResultCode::Ok, &msg));
                 }
                 Command::Syst => {

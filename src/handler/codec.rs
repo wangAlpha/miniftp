@@ -71,9 +71,9 @@ impl Decoder for BytesCodec {
         }
         if let Some(index) = find_crlf(buf) {
             let (_, line) = buf.split_at(index);
-            return Ok(Some(Answer::from(
+            return Ok(Answer::from(
                 &String::from_utf8(line.to_vec()).unwrap(),
-            )));
+            ));
         } else {
             Ok(None)
         }
@@ -106,23 +106,29 @@ mod tests {
         let answer = Answer::new(ResultCode::BadCmdSeq, message);
 
         let mut out = Vec::new();
-        let result = "bad sequence of commands\r\n".as_bytes().to_vec();
+        let result = "503 bad sequence of commands\r\n".as_bytes().to_vec();
 
+        let code = answer.code;
         codec.encode(answer, &mut out).unwrap();
-        assert_eq!(answer.code, ResultCode::BadCmdSeq);
+        assert_eq!(code, ResultCode::BadCmdSeq);
         assert_eq!(out, result);
     }
     #[test]
     fn test_decoder() {
-        let mut codec = FtpCodec;
+        let mut ftp_codec = FtpCodec;
+        let mut client_codec = BytesCodec;
         let mut message = "bad sequence of commands";
         let answer = Answer::new(ResultCode::BadCmdSeq, message);
 
-        let mut out = Vec::new();
-        codec.encode(answer, &mut out).unwrap();
+        // Encode msg in server
+        let mut msg = Vec::new();
+        let code = answer.code;
+        ftp_codec.encode(answer, &mut msg).unwrap();
 
-        // let result = codec.decode(&mut out).unwrap().unwrap();
-        // assert_eq!(result, answer.code);
-        // assert_eq!(answer.message, result.message);
+        // Decode msg in client
+        let result = client_codec.decode(&mut msg).unwrap().unwrap();
+        let new_msg = result.message;
+        assert_eq!(result.code, code);
+        assert_eq!(message, new_msg);
     }
 }

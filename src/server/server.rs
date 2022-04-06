@@ -76,7 +76,7 @@ impl FtpServer {
 impl Handler for FtpServer {
     type Message = String;
     type Timeout = i32;
-    fn ready(&mut self, event_loop: &mut EventLoop, token: Token, revents: EpollFlags) {
+    fn ready(&mut self, event_loop: &mut EventLoop, token: Token, _revents: EpollFlags) {
         if let Token::Listen(listen_fd) = token {
             let mut conn = Connection::accept(listen_fd);
             let fd = conn.get_fd();
@@ -91,7 +91,7 @@ impl Handler for FtpServer {
                 self.conn_list
                     .insert(fd, Arc::new(Mutex::new(Connection::new(fd))));
             }
-            let mut conn = self.conn_list.get_mut(&fd).unwrap();
+            let conn = self.conn_list.get_mut(&fd).unwrap();
 
             let state = conn.lock().unwrap().dispatch(revents);
             debug!("A W/R event fd:{} state: {:?}", fd, state);
@@ -106,9 +106,17 @@ impl Handler for FtpServer {
                 }
             }
         } else if let Token::Timer(fd) = token {
+            let old_len = self.conn_list.len();
             self.conn_list.remove_idle();
             let mut _buf = [0u8; 8];
-            read(fd, &mut _buf); // 读取这个 timer_fd
+            read(fd, &mut _buf).unwrap_or_default(); // 读取这个 timer_fd
+            let new_len = self.conn_list.len();
+            if old_len != new_len {
+                debug!(
+                    "Remove idle connection, old len:{}, new len: {}",
+                    old_len, new_len
+                );
+            }
         }
     }
 }

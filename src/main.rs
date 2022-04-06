@@ -5,11 +5,6 @@ use miniftp::{self, local_client};
 use std::env;
 use std::io::Write;
 
-struct Help {
-    short: &'static str,
-    long: &'static str,
-}
-
 fn main() {
     Builder::new()
         .format(|buf, record| {

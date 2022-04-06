@@ -110,7 +110,7 @@ impl LocalClient {
             return;
         }
         if args.is_empty() {
-            print!("(to)");
+            print!("(to) ");
             io::stdout().flush().unwrap();
             stdin().read_line(&mut self.hostname).expect("input ");
         } else {
@@ -137,12 +137,15 @@ impl LocalClient {
         let password = String::new();
         let port = 8089;
         let addr = format!("127.0.0.1:{}", port);
+        debug!("Connect ftp server: {}", addr);
         self.cmd_conn = Some(Connection::connect(&addr));
         self.login(username, password);
         self.binary();
     }
     fn login(&mut self, username: String, password: String) {
-        if self.is_open() {}
+        if !self.is_open() {
+            warn!("Not connected.");
+        }
         let reply = self.send_cmd(&format!("USER {}", username)).unwrap();
         if reply.code == ResultCode::NeedPsw {
             let msg = format!("PASS {}", password);
@@ -157,7 +160,7 @@ impl LocalClient {
     fn is_open(&self) -> bool {
         self.cmd_conn.is_some()
     }
-    fn pwd(&self) {
+    fn pwd(&mut self) {
         self.send_cmd("PWD");
     }
     fn list(&mut self, args: &[String]) {
@@ -177,7 +180,7 @@ impl LocalClient {
         println!("{}", String::from_utf8(msg).unwrap());
     }
     fn receive_data(&mut self) -> Vec<u8> {
-        if let Some(ref c) = self.data_conn {
+        if let Some(ref mut c) = self.data_conn {
             // ugly function
             c.read();
             let msg = c.get_msg();
@@ -187,7 +190,7 @@ impl LocalClient {
     }
 
     fn send_file(&mut self, file: &str) -> usize {
-        if let Some(ref c) = self.data_conn {
+        if let Some(ref mut c) = self.data_conn {
             return c.send_file(file).unwrap_or(0);
         }
         0
@@ -195,10 +198,10 @@ impl LocalClient {
 
     fn send_cmd(&mut self, cmd: &str) -> Option<Answer> {
         debug!("send msg: {}", cmd);
-        let mut buf = cmd.as_bytes().to_vec();
-        let msg = Vec::new();
+        let buf = cmd.as_bytes().to_vec();
+        let mut msg = Vec::new();
         self.codec.encode(buf, &mut msg).unwrap();
-        self.cmd_conn.as_mut().unwrap().send(&buf);
+        self.cmd_conn.as_mut().unwrap().send(&msg);
         // FIXME: 这个read貌似有bug
         self.cmd_conn.as_mut().unwrap().read();
         let mut msg = self.cmd_conn.as_mut().unwrap().get_msg();
@@ -288,7 +291,8 @@ impl LocalClient {
                 let answer = self.send_cmd(&format!("RETR {}", file)).unwrap();
                 // if answer.code =
                 // 用正则表
-                self.receive_data();
+                let buf = self.receive_data();
+                total_size += buf.len();
             }
         }
         let duration = start.elapsed();
@@ -302,7 +306,7 @@ impl LocalClient {
         );
     }
     fn receive_answer(&self) {}
-    fn put(&self, files: &Vec<String>) {
+    fn put(&mut self, files: &Vec<String>) {
         // local: miniftp remote: miniftp
         // 200 PORT command successful. Consider using PASV.
         // 150 Opening BINARY mode data connection for miniftp (21863760 bytes).
@@ -313,7 +317,8 @@ impl LocalClient {
         self.binary();
         let mut total_size = 0usize;
         let start = Instant::now();
-        if let Some(ref c) = self.data_conn {
+        // TODO: send file
+        if self.data_conn.is_some() {
             for file in files.iter() {
                 if let Some(answer) = self.send_cmd(&format!("STOR {}", file)) {
                     if answer.code != ResultCode::DataConnOpened && answer.code != ResultCode::Ok {

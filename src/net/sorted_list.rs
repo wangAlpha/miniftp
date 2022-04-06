@@ -18,13 +18,16 @@ impl<K: Hash + Eq, V> TimerList<K, V> {
             timeout,
         }
     }
+    pub fn len(&self) -> usize {
+        self.list.len()
+    }
     pub fn contains(&mut self, k: &K) -> bool {
         self.list.contains(&k)
     }
     pub fn insert(&mut self, k: K, v: V) {
         self.list.put(k, (Instant::now(), v));
     }
-    pub fn get<'a>(&'a self, k: &K) -> Option<&'a V> {
+    pub fn get<'a>(&'a mut self, k: &K) -> Option<&'a V> {
         match self.list.get(k) {
             Some((_, v)) => Some(v),
             None => None,
@@ -45,7 +48,7 @@ impl<K: Hash + Eq, V> TimerList<K, V> {
     pub fn remove_idle(&mut self) {
         while !self.list.is_empty() {
             match self.list.last() {
-                Some((instant, node)) => {
+                Some((instant, _)) => {
                     if self.timeout > instant.elapsed().as_secs() {
                         // debug!("Idle node: {}, time: {}", node, instant.elapsed().as_secs());
                         self.list.remove_last();
@@ -58,7 +61,7 @@ impl<K: Hash + Eq, V> TimerList<K, V> {
 }
 
 // Borrowing rule restrictions, use pointers to store keys
-struct KeyRef<K> {
+pub struct KeyRef<K> {
     k: *const K,
 }
 

@@ -71,14 +71,10 @@ impl EventLoop {
     fn is_listen_event(&self, fd: i32) -> bool {
         self.listener.as_raw_fd() == fd || self.listeners.lock().unwrap().contains_key(&fd)
     }
-    fn is_timer_event(&self, fd: i32) ->bool {
+    fn is_timer_event(&self, fd: i32) -> bool {
         self.timers.lock().unwrap().contains_key(&fd)
     }
-    pub fn add_timer<F>(&mut self, interval: i64, f: F)
-    where
-        F: FnOnce() + Send + 'static,
-    {
-        // self.poller.registe, interest)
+    pub fn add_timer<F>(&mut self, interval: i64) {
         let timer_fd = TimerFd::new(
             ClockId::CLOCK_MONOTONIC,
             TimerFlags::TFD_CLOEXEC | TimerFlags::TFD_NONBLOCK,

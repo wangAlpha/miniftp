@@ -2,12 +2,12 @@ use super::event_loop::EventLoop;
 use log::{debug, warn};
 use nix::errno::Errno;
 use nix::fcntl::{open, OFlag};
-// use nix::libc::{c_int, getpeername, sockaddr, sockaddr_storage, socklen_t, AF_INET};
 use nix::sys::epoll::EpollFlags;
 use nix::sys::sendfile::sendfile;
-use nix::sys::socket::{accept4, connect, setsockopt, sockopt};
-use nix::sys::socket::{shutdown, socket, Shutdown};
-use nix::sys::socket::{AddressFamily, InetAddr, SockAddr, SockFlag, SockProtocol, SockType};
+use nix::sys::socket::shutdown;
+use nix::sys::socket::{accept4, connect, getpeername, getsockname, setsockopt, socket, sockopt};
+use nix::sys::socket::{AddressFamily, InetAddr, Shutdown};
+use nix::sys::socket::{SockAddr, SockFlag, SockProtocol, SockType};
 use nix::sys::stat::fstat;
 use nix::sys::stat::Mode;
 use nix::unistd::{read, write};
@@ -15,7 +15,6 @@ use std::net::{SocketAddr, TcpListener};
 use std::os::unix::prelude::AsRawFd;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 pub type ConnRef = Arc<Mutex<Connection>>;
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
@@ -112,10 +111,10 @@ impl Connection {
         self.state != State::Closed
     }
     pub fn get_peer_addr(&self) -> String {
-        self.peer_addr
+        self.peer_addr.clone()
     }
     pub fn get_local_addr(&self) -> String {
-        self.local_addr
+        self.local_addr.clone()
     }
     pub fn dispatch(&mut self, revents: EpollFlags) -> State {
         self.state = State::Ready;
@@ -185,11 +184,6 @@ impl Connection {
         // TODO:
         // write(self.fd, &data).unwrap();
     }
-    // pub fn get_peer_address(&self) -> SockAddr {
-    // let addr = getpeername(self.fd).expect("get peer socket address failed");
-    // addr
-    // SockAddr::Inet(InetAddr::V4(sockaddr_in)));
-    // }
     pub fn read(&mut self) {
         let mut buf = [0u8; 4 * 1024];
         while self.state != State::Finished && self.state != State::Closed {
