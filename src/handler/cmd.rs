@@ -1,8 +1,7 @@
 use super::error::{Error, Result};
 use enum_primitive_derive::Primitive;
 use log::debug;
-use num_traits::{FromPrimitive, ToPrimitive};
-use regex::Regex;
+use num_traits::FromPrimitive;
 use std::path::PathBuf;
 use std::str::{self, FromStr};
 
@@ -21,10 +20,10 @@ impl Answer {
     }
     pub fn from(buf: &str) -> Option<Self> {
         let s = buf.to_string();
-        if let Some(index) = s.find(b' ') {
+        if let Some(index) = s.find(' ') {
             if index < 7 {
                 let (code, message) = s.split_at(index + 1);
-                let code = ResultCode::from_i32(code.parse::<i32>().unwrap());
+                let code = ResultCode::from_i32(code.parse::<i32>().unwrap()).unwrap();
                 return Some(Answer::new(code, message));
             }
         }
@@ -34,24 +33,30 @@ impl Answer {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
-    Auth,
+    Acct,
     Cwd(PathBuf),
     List(Option<PathBuf>),
     NList(Option<PathBuf>),
     Mkd(PathBuf),
-    NoOp,
     Port(u16),
     Pass(String),
+    Rest(String),
+    NoOp,
     Pasv,
     Pwd,
     Quit,
+    Abort,
     Syst,
     CdUp,
     Retr(PathBuf),
     Rmd(PathBuf),
+    Rnfr(PathBuf),
+    Rnto(PathBuf),
     Stor(PathBuf),
+    Stat(PathBuf),
     Type(TransferType),
     User(String),
+    Help(String),
     Unknown(String),
 }
 
@@ -75,7 +80,7 @@ impl From<u8> for TransferType {
 impl AsRef<str> for Command {
     fn as_ref(&self) -> &str {
         match *self {
-            Command::Auth => "AUTH",
+            Command::Acct => "ACCT",
             Command::Cwd(_) => "CWD",
             Command::Pass(_) => "PASS",
             Command::List(_) => "LIST",
@@ -86,11 +91,17 @@ impl AsRef<str> for Command {
             Command::Pasv => "PASV",
             Command::Pwd => "PWD",
             Command::Quit => "QUIT",
+            Command::Abort => "ABORT",
+            Command::Rest(_) => "REST",
             Command::Retr(_) => "RETR",
             Command::Rmd(_) => "RMD",
+            Command::Rnfr(_) => "RNFR",
+            Command::Rnto(_) => "RNTO",
             Command::Stor(_) => "STOR",
             Command::Syst => "SYST",
             Command::Type(_) => "TYPE",
+            Command::Help(_) => "HELP",
+            Command::Stat(_) => "STAT",
             Command::CdUp => "CDUP",
             Command::User(_) => "USER",
             Command::Unknown(_) => "UNKN",
@@ -115,17 +126,22 @@ impl Command {
             .ok_or_else(|| Error::Msg("no command parameter".to_string()));
         // let d = String::from_utf8_lossy(data?).to_string();
         let command = match command.as_bytes() {
-            b"AUTH" => Command::Auth,
+            b"Acct" => Command::Acct,
             b"PASV" => Command::Pasv,
             b"PWD" => Command::Pwd,
             b"QUIT" => Command::Quit,
+            b"ABORT" => Command::Abort,
             b"SYST" => Command::Syst,
             b"CDUP" => Command::CdUp,
             b"NOOP" => Command::NoOp,
+            b"REST" => Command::Rest(String::from_utf8_lossy(data?).to_string()),
             b"CWD" => Command::Cwd(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
             b"PASS" => Command::Pass(String::from_utf8_lossy(data?).to_string()),
             b"RETR" => Command::Retr(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
+            b"RNFR" => Command::Rnfr(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
+            b"RNTO" => Command::Rnto(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
             b"STOR" => Command::Stor(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
+            b"STAT" => Command::Stat(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
             b"LIST" => Command::List(Some(PathBuf::from(
                 String::from_utf8_lossy(data?).to_string(),
             ))),
@@ -145,6 +161,7 @@ impl Command {
                 }
             }
             b"USER" => Command::User(String::from_utf8_lossy(data?).to_string()),
+            b"HELP" => Command::Help(String::from_utf8_lossy(data?).to_string()),
             b"MKD" => Command::Mkd(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
             b"RMD" => Command::Rmd(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
             s => Command::Unknown(str::from_utf8(s).unwrap_or("").to_owned()),
@@ -183,7 +200,6 @@ pub enum ResultCode {
     DataConnOpened = 125,
     FileStatusOk = 150,
     Ok = 200,
-    //CmdNotImpl=202,
     SysStatus = 211,
     DirStatus = 212,
     FileStatus = 213,

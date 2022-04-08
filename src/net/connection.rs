@@ -1,6 +1,6 @@
+use super::buffer::Buffer;
 use super::event_loop::EventLoop;
 use log::{debug, warn};
-use nix::errno::Errno;
 use nix::fcntl::{open, OFlag};
 use nix::sys::epoll::EpollFlags;
 use nix::sys::sendfile::sendfile;
@@ -10,7 +10,7 @@ use nix::sys::socket::{AddressFamily, InetAddr, Shutdown};
 use nix::sys::socket::{SockAddr, SockFlag, SockProtocol, SockType};
 use nix::sys::stat::fstat;
 use nix::sys::stat::Mode;
-use nix::unistd::{read, write};
+use nix::unistd::write;
 use std::net::{SocketAddr, TcpListener};
 use std::os::unix::prelude::AsRawFd;
 use std::str::FromStr;
@@ -29,7 +29,7 @@ pub enum State {
 const READABLE: u8 = 0b0001;
 const WRITABLE: u8 = 0b0010;
 
-trait EventSet {
+pub trait EventSet {
     fn is_readable(&self) -> bool;
     fn is_writeable(&self) -> bool;
     fn is_close(&self) -> bool;
@@ -58,8 +58,8 @@ impl EventSet for EpollFlags {
 pub struct Connection {
     fd: i32,
     state: State,
-    write_buf: Vec<u8>,
-    read_buf: Vec<u8>,
+    input_buf: Buffer,
+    output_buf: Buffer,
     local_addr: String,
     peer_addr: String,
 }
@@ -72,8 +72,8 @@ impl Connection {
         Connection {
             fd,
             state: State::Ready,
-            write_buf: Vec::new(),
-            read_buf: Vec::new(),
+            input_buf: Buffer::new(),
+            output_buf: Buffer::new(),
             local_addr,
             peer_addr,
         }
@@ -104,9 +104,12 @@ impl Connection {
     pub fn accept(listen_fd: i32) -> Self {
         let fd = accept4(listen_fd, SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK).unwrap();
         setsockopt(fd, sockopt::TcpNoDelay, &true).unwrap();
+        setsockopt(fd, sockopt::KeepAlive, &true).unwrap();
         Connection::new(fd)
     }
-
+    pub fn set_no_delay(&mut self, on: bool) {
+        setsockopt(self.fd, sockopt::KeepAlive, &on).unwrap();
+    }
     pub fn connected(&self) -> bool {
         self.state != State::Closed
     }
@@ -119,7 +122,7 @@ impl Connection {
     pub fn dispatch(&mut self, revents: EpollFlags) -> State {
         self.state = State::Ready;
         if revents.is_readable() {
-            self.read();
+            self.input_buf.read(self.fd);
         }
         if revents.is_writeable() {
             self.write();
@@ -138,13 +141,13 @@ impl Connection {
     pub fn get_state(&self) -> State {
         self.state
     }
-    pub fn get_msg(&mut self) -> Vec<u8> {
-        let buf = self.read_buf.to_owned();
-        self.read_buf.clear();
-        buf
-    }
+    // pub fn get_msg(&mut self) -> Vec<u8> {
+    //     let buf = self.read_buf.to_owned();
+    //     self.read_buf.clear();
+    //     buf
+    // }
     pub fn register_read(&mut self, event_loop: &mut EventLoop) {
-        self.read_buf.clear();
+        // self.read_buf.clear();
         event_loop.reregister(
             self.fd,
             EpollFlags::EPOLLHUP
@@ -164,6 +167,7 @@ impl Connection {
             Err(e) => warn!("Shutdown {} occur {} error", self.fd, e),
         }
     }
+    // TODO: 限速发送，定时发送一部分
     pub fn send_file(&mut self, file: &str) -> Option<usize> {
         let fd = open(file, OFlag::O_RDWR, Mode::S_IRUSR).unwrap();
         let stat = fstat(fd).unwrap();
@@ -184,33 +188,67 @@ impl Connection {
         // TODO:
         // write(self.fd, &data).unwrap();
     }
-    pub fn read(&mut self) {
-        let mut buf = [0u8; 4 * 1024];
-        while self.state != State::Finished && self.state != State::Closed {
-            match read(self.fd, &mut buf) {
-                Ok(0) => self.state = State::Finished,
-                Ok(n) => {
-                    self.read_buf.extend_from_slice(&buf[0..n]);
-                    self.state = State::Reading;
-                    if n != buf.len() {
-                        self.state = State::Finished;
-                        debug!("Read data len: {}", n);
-                        break;
-                    }
-                }
-                Err(Errno::EINTR) => debug!("Read EINTR error"),
-                Err(Errno::EAGAIN) => debug!("Read EAGIN error"),
-                Err(e) => {
-                    self.state = State::Closed;
-                    warn!("Read error: {}", e);
-                }
-            }
-            // TODO: buffer replace vec
-            if self.write_buf.len() >= 64 * 1024 {
-                self.state = State::Reading;
-                debug!("Send data size exceed 64kB");
-                break;
-            }
-        }
+    pub fn read_buf(&mut self) -> Vec<u8> {
+        self.input_buf.read(self.fd);
+        self.input_buf.read_buf()
     }
+    pub fn read_msg(&mut self) -> Option<Vec<u8>> {
+        match self.input_buf.read(self.fd) {
+            Some(0) | None => None,
+            Some(_) => self.input_buf.get_crlf_line(),
+        }
+        // let mut buf = [0u8; 4 * 1024];
+        // while self.state != State::Finished && self.state != State::Closed {
+        //     match read(self.fd, &mut buf) {
+        //         Ok(0) => self.state = State::Finished,
+        //         Ok(n) => {
+        //             self.read_buf.extend_from_slice(&buf[0..n]);
+        //             self.state = State::Reading;
+        //             if n != buf.len() {
+        //                 self.state = State::Finished;
+        //                 debug!("Read data len: {}", n);
+        //                 break;
+        //             }
+        //         }
+        //         Err(Errno::EINTR) => debug!("Read EINTR error"),
+        //         Err(Errno::EAGAIN) => debug!("Read EAGIN error"),
+        //         Err(e) => {
+        //             self.state = State::Closed;
+        //             warn!("Read error: {}", e);
+        //         }
+        //     }
+        //     // TODO: buffer replace vec
+        //     if self.write_buf.len() >= 64 * 1024 {
+        //         self.state = State::Reading;
+        //         debug!("Send data size exceed 64kB");
+        //         break;
+        //     }
+        // }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nix::sys::socket::socketpair;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    #[test]
+    fn test_send_rev_msg() {
+        let (rev, send) = socketpair(
+            AddressFamily::Inet,
+            SockType::Stream,
+            SockProtocol::Tcp,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let rev = Rc::new(RefCell::new(Connection::new(rev)));
+        let send = Rc::new(RefCell::new(Connection::new(rev)));
+        assert_eq!(*rev.borrow_mut().connected(), true);
+        assert_eq!(*send.borrow_mut().connected(), true);
+
+        // *send.borrow_mut().send("");
+    }
+    #[test]
+    fn test_send_rev_file() {}
 }

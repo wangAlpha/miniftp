@@ -36,7 +36,7 @@ impl Decoder for FtpCodec {
     type Error = io::Error;
     fn decode(&mut self, buf: &mut Vec<u8>) -> Result<Option<Self::Item>, Self::Error> {
         if let Some(index) = find_crlf(buf) {
-            let (_, line) = buf.split_at(index); // Remove \r\n
+            let (line, _) = buf.split_at(index); // Remove \r\n
             Command::new(line.to_vec())
                 .map(|cmd| Some(cmd))
                 .map_err(Error::to_io_error)
@@ -71,9 +71,7 @@ impl Decoder for BytesCodec {
         }
         if let Some(index) = find_crlf(buf) {
             let (_, line) = buf.split_at(index);
-            return Ok(Answer::from(
-                &String::from_utf8(line.to_vec()).unwrap(),
-            ));
+            return Ok(Answer::from(&String::from_utf8(line.to_vec()).unwrap()));
         } else {
             Ok(None)
         }
@@ -117,7 +115,7 @@ mod tests {
     fn test_decoder() {
         let mut ftp_codec = FtpCodec;
         let mut client_codec = BytesCodec;
-        let mut message = "bad sequence of commands";
+        let message = "bad sequence of commands";
         let answer = Answer::new(ResultCode::BadCmdSeq, message);
 
         // Encode msg in server

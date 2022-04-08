@@ -29,7 +29,7 @@ pub struct LocalClient {
 impl LocalClient {
     pub fn new() -> Self {
         LocalClient {
-            hostname: String::new(),
+            hostname: "127.0.0.1".to_string(),
             port: 8089,
             connected: false,
             quit: false,
@@ -61,8 +61,9 @@ impl LocalClient {
             }
         }
     }
-    pub fn handle_cmd(&mut self, line: &mut String) -> String {
+    pub fn handle_cmd(&mut self, line: &String) -> String {
         // 去回车符号
+        let line = strip_trailing_newline(line.clone());
         let mut commands = Vec::new();
         for s in line.split_ascii_whitespace() {
             commands.push(String::from_str(s).unwrap());
@@ -104,7 +105,6 @@ impl LocalClient {
         String::from("_")
     }
     fn open(&mut self, args: &Vec<String>) {
-        println!("args: {:?}", args);
         if self.is_open() {
             println!("Already connected to localhost, use close first.");
             return;
@@ -125,20 +125,24 @@ impl LocalClient {
                 }
             }
         }
+        let addr = format!("{}:{}", self.hostname, self.port);
+        debug!("Connect ftp server: {}", addr);
+        self.cmd_conn = Some(Connection::connect(&addr));
         self.user();
     }
     fn user(&mut self) {
-        // print!("Name ({}:user):", self.hostname);
-        // stdin().read_line(&mut username).unwrap();
-        // print!("Password:");
-        // stdin().read_line(&mut password).unwrap();
+        let mut username = String::new();
+        let mut password = String::new();
+        print!("Name ({}:user):", self.hostname);
+        io::stdout().flush().unwrap();
+        stdin().read_line(&mut username).unwrap();
+        let username = strip_trailing_newline(username);
 
-        let username = String::new();
-        let password = String::new();
-        let port = 8089;
-        let addr = format!("127.0.0.1:{}", port);
-        debug!("Connect ftp server: {}", addr);
-        self.cmd_conn = Some(Connection::connect(&addr));
+        print!("Password:");
+        io::stdout().flush().unwrap();
+        stdin().read_line(&mut password).unwrap();
+        let password = strip_trailing_newline(password);
+
         self.login(username, password);
         self.binary();
     }
@@ -182,8 +186,7 @@ impl LocalClient {
     fn receive_data(&mut self) -> Vec<u8> {
         if let Some(ref mut c) = self.data_conn {
             // ugly function
-            c.read();
-            let msg = c.get_msg();
+            let msg = c.read_buf();
             return msg;
         }
         Vec::new()
@@ -197,21 +200,20 @@ impl LocalClient {
     }
 
     fn send_cmd(&mut self, cmd: &str) -> Option<Answer> {
-        debug!("send msg: {}", cmd);
+        debug!("Send msg: {}", cmd);
         let buf = cmd.as_bytes().to_vec();
         let mut msg = Vec::new();
         self.codec.encode(buf, &mut msg).unwrap();
         self.cmd_conn.as_mut().unwrap().send(&msg);
         // FIXME: 这个read貌似有bug
-        self.cmd_conn.as_mut().unwrap().read();
-        let mut msg = self.cmd_conn.as_mut().unwrap().get_msg();
+        if let Some(ref mut c) = self.cmd_conn {
+            let buf = c.read_msg();
+            let mut msg = buf.unwrap();
 
-        let answer = self.codec.decode(&mut msg).unwrap();
-        if let Some(answer) = answer {
-            Some(answer)
-        } else {
-            None
+            let answer = self.codec.decode(&mut msg).unwrap();
+            return answer;
         }
+        None
     }
 
     fn port(&mut self) {
@@ -286,13 +288,15 @@ impl LocalClient {
 
         let mut total_size = 0usize;
         let start = Instant::now();
-        if let Some(ref c) = self.data_conn {
+        if self.data_conn.is_some() {
             for file in files.iter() {
                 let answer = self.send_cmd(&format!("RETR {}", file)).unwrap();
-                // if answer.code =
-                // 用正则表
-                let buf = self.receive_data();
-                total_size += buf.len();
+                if answer.code == ResultCode::DataConnOpened {
+                    let buf = self.receive_data();
+                    total_size += buf.len();
+                    // TODO:
+                    // write buf to file
+                }
             }
         }
         let duration = start.elapsed();
@@ -397,4 +401,11 @@ pub fn get_file_size(path: &Path) -> usize {
             0
         }
     }
+}
+
+pub fn strip_trailing_newline(s: String) -> String {
+    let mut s = s;
+    let len_withoutcrlf = s.trim_right().len();
+    s.truncate(len_withoutcrlf);
+    s
 }

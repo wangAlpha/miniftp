@@ -6,6 +6,8 @@ use std::mem::{self, MaybeUninit};
 use std::ptr;
 use std::time::Instant;
 
+type NodePtr<KeyType, ValueType> = *mut Entry<KeyType, ValueType>;
+
 pub struct TimerList<K: Hash + Eq, V> {
     list: SortedList<K, (Instant, V)>,
     timeout: u64,
@@ -88,8 +90,8 @@ impl<K> Borrow<K> for KeyRef<K> {
 struct Entry<K, V> {
     key: K,
     val: V,
-    prev: *mut Entry<K, V>,
-    next: *mut Entry<K, V>,
+    prev: NodePtr<K, V>,
+    next: NodePtr<K, V>,
 }
 
 impl<K, V> Entry<K, V> {
@@ -104,8 +106,8 @@ impl<K, V> Entry<K, V> {
 }
 pub struct SortedList<K, V> {
     map: HashMap<KeyRef<K>, Box<Entry<K, V>>>,
-    head: *mut Entry<K, V>,
-    tail: *mut Entry<K, V>,
+    head: NodePtr<K, V>,
+    tail: NodePtr<K, V>,
 }
 
 impl<K: Hash + Eq, V> SortedList<K, V> {
@@ -136,7 +138,7 @@ impl<K: Hash + Eq, V> SortedList<K, V> {
     pub fn put(&mut self, k: K, mut v: V) -> Option<V> {
         // Find node from map
         let node_ptr = self.map.get_mut(&KeyRef { k: &k }).map(|node| {
-            let node_ptr: *mut Entry<K, V> = &mut **node;
+            let node_ptr: NodePtr<K, V> = &mut **node;
             node_ptr
         });
         match node_ptr {
@@ -150,7 +152,7 @@ impl<K: Hash + Eq, V> SortedList<K, V> {
             None => {
                 let mut node = Box::new(Entry::new(k, v));
                 // From smart point to raw pointer
-                let node_ptr: *mut Entry<K, V> = &mut *node;
+                let node_ptr: NodePtr<K, V> = &mut *node;
                 self.attach(node_ptr);
                 // Insert new Key/Value to map
                 let keyref = unsafe { &(*node_ptr).key };
@@ -169,7 +171,7 @@ impl<K: Hash + Eq, V> SortedList<K, V> {
             None => (None, None),
             Some(node) => {
                 // Dereference smart pointer to raw pointer
-                let node_ptr: *mut Entry<K, V> = &mut **node;
+                let node_ptr: NodePtr<K, V> = &mut **node;
                 (Some(node_ptr), Some(unsafe { &(*node_ptr).val }))
             }
         };
@@ -189,7 +191,7 @@ impl<K: Hash + Eq, V> SortedList<K, V> {
         let (node_ptr, value) = match self.map.get_mut(&key) {
             None => (None, None),
             Some(node) => {
-                let node_ptr: *mut Entry<K, V> = &mut **node;
+                let node_ptr: NodePtr<K, V> = &mut **node;
                 (Some(node_ptr), Some(unsafe { &mut (*node_ptr).val }))
             }
         };
@@ -223,7 +225,7 @@ impl<K: Hash + Eq, V> SortedList<K, V> {
         match self.map.remove(&key) {
             None => None,
             Some(mut old_node) => {
-                let node_ptr: *mut Entry<K, V> = &mut *old_node;
+                let node_ptr: NodePtr<K, V> = &mut *old_node;
                 self.detach(node_ptr);
                 Some(old_node.val)
             }
@@ -265,7 +267,7 @@ impl<K: Hash + Eq, V> SortedList<K, V> {
                 k: unsafe { &(*(*self.tail).prev).key },
             };
             let mut old_node = self.map.remove(&old_key).unwrap();
-            let node_ptr: *mut Entry<K, V> = &mut *old_node;
+            let node_ptr: NodePtr<K, V> = &mut *old_node;
             self.detach(node_ptr);
             // Reture smart pointer
             Some(old_node)
@@ -274,14 +276,14 @@ impl<K: Hash + Eq, V> SortedList<K, V> {
         }
     }
 
-    fn detach(&mut self, node: *mut Entry<K, V>) {
+    fn detach(&mut self, node: NodePtr<K, V>) {
         unsafe {
             (*(*node).prev).next = (*node).next;
             (*(*node).next).prev = (*node).prev;
         }
     }
     // Attach node to head
-    fn attach(&mut self, node: *mut Entry<K, V>) {
+    fn attach(&mut self, node: NodePtr<K, V>) {
         unsafe {
             (*node).next = (*self.head).next;
             (*node).prev = self.head;

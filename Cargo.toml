@@ -15,6 +15,10 @@ env_logger = "0.9"
 chrono = "0.4.19"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.8"
+regex = "1.5.5"
+num = "0.4.0"
+enum-primitive-derive = "^0.1"
+num-traits = "^0.1"
 
 
 [profile.dev]

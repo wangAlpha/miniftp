@@ -1,5 +1,5 @@
 use crate::handler::cmd::*;
-use crate::handler::codec::FtpCodec;
+use crate::handler::codec::{Decoder, Encoder, FtpCodec};
 use crate::net::connection::{ConnRef, Connection};
 use crate::net::event_loop::EventLoop;
 use crate::server::local_client::*;
@@ -18,6 +18,7 @@ use std::iter::Iterator;
 use std::net::TcpListener;
 use std::os::unix::prelude::AsRawFd;
 use std::path::{Component, Path, PathBuf};
+use std::rc::Rc;
 use std::string::String;
 use std::sync::{Arc, Mutex};
 
@@ -39,8 +40,8 @@ impl Context {
 #[derive(Debug, Clone)]
 pub struct Session {
     cwd: PathBuf,
-    cmd_conn: ConnRef,
-    data_conn: Option<ConnRef>,
+    cmd_conn: Connection,
+    data_conn: Option<Connection>,
     data_port: Option<u16>,
     codec: FtpCodec,
     server_root: PathBuf,
@@ -51,34 +52,48 @@ pub struct Session {
     waiting_password: bool,
     event_loop: EventLoop,
     config: Config,
+    conn_map: Arc<Mutex<HashMap<i32, i32>>>, // <data fd, cmd fd>
 }
 
 impl Session {
-    pub fn new(config: &Config, conn: ConnRef, event_loop: EventLoop) -> Self {
+    pub fn new(
+        config: &Config,
+        conn: Connection,
+        event_loop: &EventLoop,
+        conn_map: &Arc<Mutex<HashMap<i32, i32>>>,
+    ) -> Self {
         Session {
             cwd: PathBuf::new(),
             cmd_conn: conn,
             data_conn: None,
-            data_port: Some(2222),
+            data_port: Some(22),
             codec: FtpCodec,
             server_root: current_dir().unwrap(),
             is_admin: true,
             transfer_type: TransferType::ASCII,
             waiting_password: false,
-            event_loop,
+            event_loop: event_loop.clone(),
             curr_file_context: None,
             name: None,
             config: config.clone(),
+            conn_map: conn_map.clone(),
         }
     }
-    pub fn handle_command(&mut self, msg: Vec<u8>, conn_map: &mut Arc<Mutex<HashMap<i32, i32>>>) {
-        let cmd = Command::new(msg).unwrap();
-        let connected = self.cmd_conn.lock().unwrap().connected();
+    pub fn handle_command(&mut self) {
+        let msg = self.cmd_conn.read_msg();
+        if msg.is_none() {
+            warn!("msg is none");
+            return;
+        }
+        let mut msg = msg.unwrap();
+        let cmd = self.codec.decode(&mut msg).unwrap().unwrap();
+        debug!("Cmd: {:?}", cmd);
+        let connected = self.cmd_conn.connected();
         if connected && self.is_logged() {
             match cmd {
                 Command::Cwd(dir) => self.cwd(dir),
                 Command::List(path) => self.list(path),
-                Command::Pasv => self.pasv(conn_map),
+                Command::Pasv => self.pasv(),
                 Command::Port(port) => {
                     self.data_port = Some(port);
                     self.send_answer(Answer::new(
@@ -89,11 +104,11 @@ impl Session {
                     let addr = format!("127.0.0.1:{}", port);
                     let mut c = Connection::connect(addr.as_str());
 
-                    let cmd_fd = self.cmd_conn.lock().unwrap().get_fd();
+                    let cmd_fd = self.cmd_conn.get_fd();
                     let data_fd = c.get_fd();
                     c.register_read(&mut self.event_loop);
-                    self.data_conn = Some(Arc::new(Mutex::new(c)));
-                    conn_map.lock().unwrap().insert(data_fd, cmd_fd);
+                    self.data_conn = Some(c);
+                    self.conn_map.lock().unwrap().insert(data_fd, cmd_fd);
                 }
                 Command::Pwd => {
                     self.pwd();
@@ -135,7 +150,7 @@ impl Session {
             }
         } else {
             match cmd {
-                Command::Auth => {
+                Command::Acct => {
                     self.send_answer(Answer::new(ResultCode::CmdNotImpl, "Not implemented"))
                 }
                 Command::Quit => self.quit(),
@@ -151,16 +166,19 @@ impl Session {
                         self.is_admin = false;
 
                         if let Some(ref admin) = self.config.admin {
-                            self.is_admin = admin.eq(&self.config.admin.clone().unwrap());
-                        }
-                        if self.name.is_none() {
-                            if self.config.users.contains_key(&content) {
-                                self.name = Some(content.clone());
-                                pass_required =
-                                    self.config.users[&(content.clone())].is_empty() == false
+                            if content.eq(admin) {
+                                self.is_admin = true;
+                                name = Some(content.clone());
+                                pass_required = false;
                             }
                         }
-                        if self.name.is_none() {
+                        if name.is_none() {
+                            if self.config.users.contains_key(&content) {
+                                name = Some(content.clone());
+                                pass_required = !self.config.users[&(content.clone())].is_empty()
+                            }
+                        }
+                        if name.is_none() {
                             self.send_answer(Answer::new(ResultCode::NotLogin, "Unknown user..."));
                         } else {
                             self.name = name.clone();
@@ -168,10 +186,7 @@ impl Session {
                                 self.waiting_password = true;
                                 self.send_answer(Answer::new(
                                     ResultCode::NeedPsw,
-                                    &format!(
-                                        "Login Ok, password needed for {}",
-                                        name.unwrap().clone()
-                                    ),
+                                    &format!("Login Ok, password needed for {}", name.unwrap()),
                                 ));
                             } else {
                                 self.waiting_password = false;
@@ -218,6 +233,22 @@ impl Session {
             }
         }
         debug!("cmd_conn: {} is logged: {}", connected, self.is_logged());
+    }
+    pub fn handle_data(&mut self) {
+        if let Some(ref mut c) = self.data_conn {
+            let connected = if c.connected() { "UP" } else { "DOWN" };
+            debug!(
+                "data conn: {}, local: {} peer: {} {}",
+                c.get_fd(),
+                c.get_local_addr(),
+                c.get_peer_addr(),
+                connected
+            );
+            let buf = c.read_buf();
+            debug!("Read buffer size: {}", buf.len());
+        } else {
+            warn!("data conn is none");
+        }
     }
     fn is_logged(&self) -> bool {
         self.name.is_some() && self.waiting_password
@@ -284,7 +315,7 @@ impl Session {
             ));
         }
     }
-    fn pasv(&mut self, conn_map: &mut Arc<Mutex<HashMap<i32, i32>>>) {
+    fn pasv(&mut self) {
         let port = if let Some(port) = self.data_port {
             port
         } else {
@@ -303,10 +334,10 @@ impl Session {
         self.send_answer(Answer::new(ResultCode::Ok, "PASV is start"));
         let mut c = Connection::accept(listener.as_raw_fd());
         c.register_read(&mut self.event_loop);
-        self.data_conn = Some(Arc::new(Mutex::new(c)));
-        let cmd_fd = self.cmd_conn.lock().unwrap().get_fd();
-        let data_fd = self.data_conn.clone().unwrap().lock().unwrap().get_fd();
-        conn_map.lock().unwrap().insert(data_fd, cmd_fd);
+        let cmd_fd = self.cmd_conn.get_fd();
+        let data_fd = c.get_fd(); // self.data_conn.unwrap().get_fd();
+        self.data_conn = Some(c);
+        self.conn_map.lock().unwrap().insert(data_fd, cmd_fd);
     }
     fn pwd(&mut self) {
         let message = format!("{}", self.cwd.to_str().unwrap_or(""));
@@ -321,10 +352,11 @@ impl Session {
         }
     }
     fn quit(&mut self) {
-        if self.data_conn.is_some() {
-            self.data_conn.clone().unwrap().lock().unwrap().shutdown();
+        if let Some(ref mut c) = self.data_conn {
+            c.shutdown();
         }
-        self.cmd_conn.lock().unwrap().shutdown();
+        self.data_conn = None;
+        self.cmd_conn.shutdown();
     }
     fn retr(&mut self, path: PathBuf) {
         if self.data_conn.is_some() {
@@ -423,21 +455,20 @@ impl Session {
     }
 
     fn send_answer(&mut self, answer: Answer) {
-        self.cmd_conn
-            .lock()
-            .unwrap()
-            .send(format!("{} {}", answer.code as i32, answer.message).as_bytes())
+        let mut buf = Vec::new();
+        self.codec.encode(answer, &mut buf).unwrap();
+        self.cmd_conn.send(&buf);
     }
 
     fn send_data(&mut self, data: &[u8]) {
-        if let Some(c) = self.data_conn.clone() {
-            c.lock().unwrap().send(data)
+        if let Some(ref mut c) = self.data_conn {
+            c.send(data)
         }
     }
 
     fn close_data_conn(&mut self) {
         if let Some(c) = &self.data_conn.clone() {
-            c.lock().unwrap().shutdown();
+            c.shutdown();
             self.data_conn = None;
         }
     }
@@ -472,10 +503,11 @@ pub fn permissions(mode: u32) -> String {
     String::from_utf8(out).unwrap()
 }
 
+// Output directoty information, example:
+// drwxr-xr-x 19 root root 646 Apr  3 12:14 ..
+// drwxr-xr-x  8 root root 272 Mar 29 20:33 handler
+// -rw-r--r--  1 root root 168 Mar 28 17:49 lib.rs
 pub fn add_file_info(path: &str, out: &mut Vec<u8>) {
-    // drwxr-xr-x 19 root root 646 Apr  3 12:14 ..
-    // drwxr-xr-x  8 root root 272 Mar 29 20:33 handler
-    // -rw-r--r--  1 root root 168 Mar 28 17:49 lib.rs
     let extra = if true { "/" } else { "" };
     let is_dir = if true { "d" } else { "-" };
 

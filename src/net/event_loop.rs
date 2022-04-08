@@ -13,6 +13,11 @@ pub const EVENT_ERR: EpollFlags = EpollFlags::EPOLLERR;
 pub const EVENT_HUP: EpollFlags = EpollFlags::EPOLLHUP;
 pub const EVENT_WRIT: EpollFlags = EpollFlags::EPOLLOUT;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ConnType {
+    Data,
+    Cmd,
+}
 #[derive(Debug, Clone, Copy)]
 pub enum Token {
     Listen(i32),
@@ -23,7 +28,7 @@ pub enum Token {
 pub trait Handler: Sized {
     type Timeout;
     type Message;
-    fn ready(&mut self, event_loop: &mut EventLoop, token: Token, revent: EpollFlags);
+    fn ready(&mut self, event_loop: &mut EventLoop, token: Token, typ: EpollFlags);
     fn notify(&mut self, event_loop: &mut EventLoop, token: Token, revent: EpollFlags);
 }
 

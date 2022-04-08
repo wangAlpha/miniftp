@@ -1,5 +1,4 @@
-use nix::fcntl::flock;
-use nix::fcntl::FlockArg;
+use nix::fcntl::{flock, FlockArg};
 
 pub struct FileLock {
     fd: i32,

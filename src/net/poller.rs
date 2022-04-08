@@ -1,6 +1,5 @@
 use log::warn;
-use nix::fcntl::fcntl;
-use nix::fcntl::FcntlArg;
+use nix::fcntl::{fcntl, FcntlArg};
 use nix::sys::epoll::{epoll_create1, epoll_ctl, epoll_wait};
 use nix::sys::epoll::{EpollCreateFlags, EpollEvent, EpollFlags, EpollOp};
 use nix::unistd::close;

@@ -1,0 +1,14 @@
+server_addr: "127.0.0.1"
+server_port: 8089
+pasv_enable: true
+pasv_port: [2222, 2225]
+max_rate: 409600
+max_clients: 200
+ssl_enable: true
+rsa_cert_file: "/etc/ssl/certs/ssl-cert-snakeoil.pem"
+rsa_private_key_file: "/etc/ssl/private/ssl-cert-snakeoil.key"
+admin: "123456"
+users:
+    "liwang": ""
+    "anonymous": ""
+
