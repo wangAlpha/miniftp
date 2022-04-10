@@ -1,6 +1,6 @@
 use crate::handler::session::Session;
-use crate::net::connection::{ConnRef, Connection, EventSet, State};
-use crate::net::event_loop::{ConnType, EventLoop, Handler, Token};
+use crate::net::connection::Connection;
+use crate::net::event_loop::{EventLoop, Handler, Token};
 use crate::net::queue::{BlockingQueue, BlockingQueueRef};
 use crate::net::sorted_list::TimerList;
 use crate::threadpool::threadpool::ThreadPool;
@@ -8,18 +8,15 @@ use crate::utils::config::{Config, DEFAULT_CONF_FILE};
 use crate::utils::utils::already_running;
 use log::{debug, info, warn};
 use nix::sys::epoll::EpollFlags;
-use nix::unistd::read;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::os::unix::prelude::AsRawFd;
-use std::rc::{self, Rc, Weak};
-use std::sync::{Arc, Mutex, RwLock};
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 const DEFAULT_TIME_OUT: u64 = 60; // time (s)
 
-// type TaskQueueRef = BlockingQueueRef<(ConnRef, Vec<u8>)>;
-
-type TaskQueueRef = BlockingQueueRef<(Arc<Mutex<Session>>, ConnType)>;
+type TaskQueueRef = BlockingQueueRef<Arc<Mutex<Session>>>;
 
 pub struct FtpServer {
     conn_list: TimerList<i32, Rc<RefCell<Connection>>>,
@@ -39,12 +36,8 @@ impl FtpServer {
         for _ in 0..pool.len() {
             let q_clone = q.clone();
             pool.execute(move || loop {
-                let (session, typ) = q_clone.pop_front();
-                if typ == ConnType::Cmd {
-                    session.lock().unwrap().handle_command();
-                } else {
-                    session.lock().unwrap().handle_data();
-                }
+                let session = q_clone.pop_front();
+                session.lock().unwrap().handle_command();
             });
         }
         FtpServer {
@@ -66,20 +59,15 @@ impl Handler for FtpServer {
         if let Token::Listen(listen_fd) = token {
             let mut conn = Connection::accept(listen_fd);
             let fd = conn.get_fd();
+            debug!("A new connection: {:?}:{}", token, fd);
+
             if self.config.max_clients > self.sessions.len() {
                 conn.register_read(event_loop);
-                // self.conn_list.insert(fd, conn.clone());
                 let s = Session::new(&self.config, conn, event_loop, &self.conn_map);
                 self.sessions.insert(fd, Arc::new(Mutex::new(s)));
-                debug!(
-                    "A new connection: {:?}, num connected: {}",
-                    token,
-                    self.sessions.len()
-                );
             } else {
                 warn!(
-                    "Max connection number: {}, conn list: {} shutdown: {}",
-                    self.config.max_clients,
+                    "Session number: {}, shutdown conn: {}",
                     self.sessions.len(),
                     fd
                 );
@@ -87,19 +75,10 @@ impl Handler for FtpServer {
             }
         }
     }
-    fn notify(&mut self, event_loop: &mut EventLoop, token: Token, revents: EpollFlags) {
+    fn notify(&mut self, _event_loop: &mut EventLoop, token: Token, revents: EpollFlags) {
         if let Token::Notify(fd) = token {
-            let exist = self.conn_map.lock().unwrap().contains_key(&fd);
-            let (session, typ) = if exist {
-                // It must be a data connection
-                let cmd_fd = self.conn_map.lock().unwrap().get(&fd).unwrap().clone();
-                (self.sessions.get(&cmd_fd).unwrap(), ConnType::Data)
-            } else {
-                (self.sessions.get(&fd).unwrap(), ConnType::Cmd)
-            };
-            if revents.is_readable() || revents.is_writeable() {
-                self.request_queue.push_back((session.clone(), typ));
-            }
+            let s = self.sessions.get(&fd).unwrap();
+            self.request_queue.push_back(s.clone());
             // TODO: Session 注销逻辑
         } else if let Token::Timer(fd) = token {
             debug!("timer: {}", fd);

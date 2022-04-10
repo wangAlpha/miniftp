@@ -24,6 +24,7 @@ pub struct LocalClient {
     cmd_conn: Option<Connection>,
     data_conn: Option<Connection>,
     codec: BytesCodec,
+    pasv_mode: bool,
 }
 
 impl LocalClient {
@@ -36,6 +37,7 @@ impl LocalClient {
             cmd_conn: None,
             data_conn: None,
             codec: BytesCodec,
+            pasv_mode: true,
         }
     }
     pub fn shell_loop(&mut self) {
@@ -76,11 +78,10 @@ impl LocalClient {
         match cmd.as_bytes() {
             b"OPEN" => self.open(&args),
             b"USER" => self.user(),
-            b"PASV" => {
-                let s = self.send_cmd("PASV").unwrap();
-                let port = self.port + 1;
-                let addr = format!("127.0.0.1:{}", port);
-                self.data_conn = Some(Connection::connect(addr.as_str()));
+            b"PASSIVE" => {
+                self.pasv_mode = !self.pasv_mode;
+                let on = if self.pasv_mode { "on" } else { "off" };
+                println!("Passive mode {}.", on);
             }
             b"ABOR" => self.abort(),
             b"CLOSE" => self.close(),
@@ -128,6 +129,7 @@ impl LocalClient {
         let addr = format!("{}:{}", self.hostname, self.port);
         debug!("Connect ftp server: {}", addr);
         self.cmd_conn = Some(Connection::connect(&addr));
+        // let welcome = self.receive_answer();
         self.user();
     }
     fn user(&mut self) {
@@ -215,7 +217,20 @@ impl LocalClient {
         }
         None
     }
-
+    fn get_data_connect(&mut self) {
+        if self.pasv_mode {
+            self.pasv();
+        } else {
+            self.port();
+        }
+    }
+    fn pasv(&mut self) {
+        let s = self.send_cmd("PASV").unwrap();
+        println!("{}", s);
+        let port = self.port + 1;
+        // let addr = format!("127.0.0.1:{}", port);
+        // self.data_conn = Some(Connection::connect(addr.as_str()));
+    }
     fn port(&mut self) {
         // TODO: check status code
         if let Some(c) = self.data_conn.clone() {
@@ -224,6 +239,7 @@ impl LocalClient {
         }
         // FIXME: a connection bug
         // get current local connection {port}
+        // TODO: random port
         let port = self.port + 1;
         let cmd = format!("PORT 127,0,0,1,{},{}", port >> 8, 0xFF & port);
         self.send_cmd(&cmd);
@@ -248,12 +264,13 @@ impl LocalClient {
         // 上传文件的默认权限
         // 支持断点续传
         // 在服务端进行限速
+        // TODO
         self.send_cmd(&format!("STOR {:?}", path.display()));
         if let Some(c) = self.data_conn.clone() {
-            self.send_answer(Answer::new(
-                ResultCode::DataConnOpened,
-                "Starting to send file...",
-            ));
+            // self.send_answer(Answer::new(
+            //     ResultCode::DataConnOpened,
+            //     "Starting to send file...",
+            // ));
             let fd = open(path, OFlag::O_RDONLY, Mode::all()).unwrap();
             let lock = FileLock::new(fd);
             lock.lock(false);
@@ -268,16 +285,6 @@ impl LocalClient {
         } else {
             warn!("No opened data connection!");
         }
-    }
-    fn send_answer(&mut self, answer: Answer) {
-        if let Some(c) = self.cmd_conn.as_mut() {
-            let buf = format!("{} {}", answer.code as i32, answer.message);
-            c.send(buf.as_bytes());
-        }
-    }
-    fn invaild_path(&self, path: &str) -> bool {
-        // TODO
-        true
     }
     fn get(&mut self, files: &Vec<String>) {
         // local: miniftp remote: miniftp
@@ -405,7 +412,7 @@ pub fn get_file_size(path: &Path) -> usize {
 
 pub fn strip_trailing_newline(s: String) -> String {
     let mut s = s;
-    let len_withoutcrlf = s.trim_right().len();
+    let len_withoutcrlf = s.trim_end().len();
     s.truncate(len_withoutcrlf);
     s
 }

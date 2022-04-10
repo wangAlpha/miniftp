@@ -70,8 +70,7 @@ impl Buffer {
                 }
             }
         }
-        let s = String::from_utf8_lossy(&self.data[self.read_index..self.write_index]);
-        debug!("Buffer read data len: {:?}{}", s, len);
+        debug!("Buffer read data len:{}", len);
         Some(len)
     }
     pub fn get_line(&mut self) -> Option<String> {

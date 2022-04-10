@@ -1,7 +1,8 @@
 use super::error::{Error, Result};
 use enum_primitive_derive::Primitive;
-use log::debug;
+use nix::libc::write;
 use num_traits::FromPrimitive;
+use std::fmt;
 use std::path::PathBuf;
 use std::str::{self, FromStr};
 
@@ -22,12 +23,24 @@ impl Answer {
         let s = buf.to_string();
         if let Some(index) = s.find(' ') {
             if index < 7 {
-                let (code, message) = s.split_at(index + 1);
+                let (code, message) = s.split_at(index);
+                println!("code:{:?},msg:{:?}", code, message);
                 let code = ResultCode::from_i32(code.parse::<i32>().unwrap()).unwrap();
-                return Some(Answer::new(code, message));
+                return Some(Answer::new(code, &message[1..]));
             }
         }
         None
+    }
+}
+
+impl fmt::Display for Answer {
+    // This trait requires `fmt` with this exact signature.
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.message.is_empty() {
+            write!(f, "{} \\r\\n", self.code as i32)
+        } else {
+            write!(f, "{} {} \\r\\n", self.code as i32, self.message)
+        }
     }
 }
 
@@ -73,6 +86,16 @@ impl From<u8> for TransferType {
             b'A' => TransferType::ASCII,
             b'I' => TransferType::BINARY,
             _ => TransferType::Unknown,
+        }
+    }
+}
+
+impl fmt::Display for TransferType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            TransferType::ASCII => write!(f, "ASCII"),
+            TransferType::BINARY => write!(f, "BINARY"),
+            TransferType::Unknown => write!(f, "UNKNOWN"),
         }
     }
 }
@@ -142,12 +165,16 @@ impl Command {
             b"RNTO" => Command::Rnto(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
             b"STOR" => Command::Stor(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
             b"STAT" => Command::Stat(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
-            b"LIST" => Command::List(Some(PathBuf::from(
-                String::from_utf8_lossy(data?).to_string(),
-            ))),
-            b"NLIST" => Command::NList(Some(PathBuf::from(
-                String::from_utf8_lossy(data?).to_string(),
-            ))),
+            b"LIST" => Command::List(if data.is_ok() {
+                Some(PathBuf::from(String::from_utf8_lossy(data?).to_string()))
+            } else {
+                Some(PathBuf::from_str(".").unwrap())
+            }),
+            b"NLIST" => Command::NList(if data.is_ok() {
+                Some(PathBuf::from(String::from_utf8_lossy(data?).to_string()))
+            } else {
+                Some(PathBuf::from_str(".").unwrap())
+            }),
             b"PORT" => extract_port(data?).unwrap(),
             b"TYPE" => {
                 let error = Err("command not implemented for that parameter".into());
@@ -171,7 +198,6 @@ impl Command {
 }
 
 pub fn extract_port(data: &[u8]) -> Result<Command> {
-    debug!("data: {}", String::from_utf8_lossy(data));
     let addr = data
         .split(|&byte| byte == b',')
         .filter_map(|bytes| {

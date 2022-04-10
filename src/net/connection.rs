@@ -1,15 +1,15 @@
 use super::buffer::Buffer;
 use super::event_loop::EventLoop;
+use super::event_loop::*;
 use log::{debug, warn};
-use nix::fcntl::{open, OFlag};
+use nix::fcntl::{fcntl, open, FcntlArg, OFlag};
 use nix::sys::epoll::EpollFlags;
 use nix::sys::sendfile::sendfile;
 use nix::sys::socket::shutdown;
 use nix::sys::socket::{accept4, connect, getpeername, getsockname, setsockopt, socket, sockopt};
 use nix::sys::socket::{AddressFamily, InetAddr, Shutdown};
 use nix::sys::socket::{SockAddr, SockFlag, SockProtocol, SockType};
-use nix::sys::stat::fstat;
-use nix::sys::stat::Mode;
+use nix::sys::stat::{fstat, Mode};
 use nix::unistd::write;
 use std::net::{SocketAddr, TcpListener};
 use std::os::unix::prelude::AsRawFd;
@@ -125,7 +125,7 @@ impl Connection {
             self.input_buf.read(self.fd);
         }
         if revents.is_writeable() {
-            self.write();
+            // self.write();
         }
         if revents.is_error() {
             self.state = State::Closed;
@@ -150,11 +150,7 @@ impl Connection {
         // self.read_buf.clear();
         event_loop.reregister(
             self.fd,
-            EpollFlags::EPOLLHUP
-                | EpollFlags::EPOLLERR
-                | EpollFlags::EPOLLIN
-                | EpollFlags::EPOLLOUT
-                | EpollFlags::EPOLLET,
+            EVENT_HUP | EVENT_ERR | EVENT_WRIT | EVENT_READ | EVENT_LEVEL,
         );
     }
     pub fn deregister(&self, event_loop: &mut EventLoop) {
@@ -169,24 +165,16 @@ impl Connection {
     }
     // TODO: 限速发送，定时发送一部分
     pub fn send_file(&mut self, file: &str) -> Option<usize> {
-        let fd = open(file, OFlag::O_RDWR, Mode::S_IRUSR).unwrap();
+        let fd = open(file, OFlag::O_RDWR, Mode::all()).unwrap();
         let stat = fstat(fd).unwrap();
         let size = sendfile(self.fd, fd, None, stat.st_size as usize).unwrap();
         Some(size)
     }
     pub fn send(&mut self, buf: &[u8]) {
         match write(self.fd, buf) {
-            Ok(_) => (),
-            Err(e) => warn!("send data error: {}", e),
+            Ok(n) => debug!("Send data len: {}", buf.len()),
+            Err(e) => warn!("Send data error: {}", e),
         };
-    }
-    pub fn write_buf(&mut self, buf: &[u8]) {
-
-        // TODO:
-    }
-    pub fn write(&mut self) {
-        // TODO:
-        // write(self.fd, &data).unwrap();
     }
     pub fn read_buf(&mut self) -> Vec<u8> {
         self.input_buf.read(self.fd);
@@ -197,33 +185,13 @@ impl Connection {
             Some(0) | None => None,
             Some(_) => self.input_buf.get_crlf_line(),
         }
-        // let mut buf = [0u8; 4 * 1024];
-        // while self.state != State::Finished && self.state != State::Closed {
-        //     match read(self.fd, &mut buf) {
-        //         Ok(0) => self.state = State::Finished,
-        //         Ok(n) => {
-        //             self.read_buf.extend_from_slice(&buf[0..n]);
-        //             self.state = State::Reading;
-        //             if n != buf.len() {
-        //                 self.state = State::Finished;
-        //                 debug!("Read data len: {}", n);
-        //                 break;
-        //             }
-        //         }
-        //         Err(Errno::EINTR) => debug!("Read EINTR error"),
-        //         Err(Errno::EAGAIN) => debug!("Read EAGIN error"),
-        //         Err(e) => {
-        //             self.state = State::Closed;
-        //             warn!("Read error: {}", e);
-        //         }
-        //     }
-        //     // TODO: buffer replace vec
-        //     if self.write_buf.len() >= 64 * 1024 {
-        //         self.state = State::Reading;
-        //         debug!("Send data size exceed 64kB");
-        //         break;
-        //     }
-        // }
+    }
+}
+impl Drop for Connection {
+    fn drop(&mut self) {
+        if 0 > fcntl(self.fd, FcntlArg::F_GETFL).unwrap() {
+            self.shutdown();
+        }
     }
 }
 
@@ -243,9 +211,9 @@ mod tests {
         )
         .unwrap();
         let rev = Rc::new(RefCell::new(Connection::new(rev)));
-        let send = Rc::new(RefCell::new(Connection::new(rev)));
-        assert_eq!(*rev.borrow_mut().connected(), true);
-        assert_eq!(*send.borrow_mut().connected(), true);
+        let send = Rc::new(RefCell::new(Connection::new(send)));
+        assert_eq!((*rev.borrow_mut()).connected(), true);
+        assert_eq!((*send.borrow_mut()).connected(), true);
 
         // *send.borrow_mut().send("");
     }

@@ -41,8 +41,14 @@ pub fn daemonize() {
 pub fn already_running() -> bool {
     let lock_mode = Mode::S_IRUSR | Mode::S_IWUSR | Mode::S_IRGRP | Mode::S_IROTH;
     let fd = open(LOCK_FILE, OFlag::O_RDWR | OFlag::O_CREAT, lock_mode).unwrap();
-    flock(fd, FlockArg::LockExclusiveNonblock).unwrap();
-    ftruncate(fd, 0).unwrap();
+    match flock(fd, FlockArg::LockExclusiveNonblock) {
+        Ok(_) => (),
+        Err(_) => return false,
+    }
+    match ftruncate(fd, 0) {
+        Ok(_) => (),
+        Err(_) => return false,
+    }
     let pid = getpid();
     let buf = format!("{}", pid);
     match write(fd, buf.as_bytes()) {

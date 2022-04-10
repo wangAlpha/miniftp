@@ -44,7 +44,7 @@ pub struct EventLoop {
 impl EventLoop {
     pub fn new(listener: TcpListener) -> Self {
         let mut poller = Poller::new();
-        let interest = EVENT_HUP | EVENT_ERR | EVENT_WRIT | EVENT_READ | EVENT_LEVEL;
+        let interest = EVENT_ERR | EVENT_WRIT | EVENT_READ | EVENT_LEVEL;
         poller.register(listener.as_raw_fd(), interest);
         EventLoop {
             listener: Arc::new(listener),
@@ -60,10 +60,7 @@ impl EventLoop {
         self.poller.register(fd, interest);
     }
     pub fn register_listen(&mut self, listener: TcpListener) {
-        self.register(
-            listener,
-            EVENT_HUP | EVENT_ERR | EVENT_WRIT | EVENT_READ | EVENT_LEVEL,
-        );
+        self.register(listener, EVENT_HUP | EVENT_WRIT | EVENT_READ | EVENT_LEVEL);
     }
     pub fn reregister(&self, fd: i32, interest: EpollFlags) {
         let event = EpollEvent::new(interest, fd as u64);
@@ -95,7 +92,8 @@ impl EventLoop {
                 TimerSetTimeFlags::empty(),
             )
             .unwrap();
-        self.poller.register(timer_fd.as_raw_fd(), EVENT_READ);
+        self.poller
+            .register(timer_fd.as_raw_fd(), EVENT_READ | EVENT_LEVEL);
         self.timers
             .lock()
             .unwrap()
