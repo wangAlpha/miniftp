@@ -1,6 +1,5 @@
 use super::error::{Error, Result};
 use enum_primitive_derive::Primitive;
-use nix::libc::write;
 use num_traits::FromPrimitive;
 use std::fmt;
 use std::path::PathBuf;
@@ -46,30 +45,37 @@ impl fmt::Display for Answer {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
-    Acct,
+    // Access control commands
     Cwd(PathBuf),
+    User(String),
+    Pass(String),
+    CdUp,
+    Quit,
+    // Transfer parameter commands
+    Port(u16),
+    Type(TransferType),
+    Pasv,
+    // Query commands
     List(Option<PathBuf>),
     NList(Option<PathBuf>),
-    Mkd(PathBuf),
-    Port(u16),
-    Pass(String),
-    Rest(String),
-    NoOp,
-    Pasv,
+    Stat(PathBuf),
+    Size(PathBuf),
+    Help(String),
     Pwd,
-    Quit,
-    Abort,
     Syst,
-    CdUp,
+    Acct,
+    NoOp,
+    // File control commands
     Retr(PathBuf),
+    Stor(PathBuf),
+    Mkd(PathBuf),
     Rmd(PathBuf),
+    Delete(PathBuf),
     Rnfr(PathBuf),
     Rnto(PathBuf),
-    Stor(PathBuf),
-    Stat(PathBuf),
-    Type(TransferType),
-    User(String),
-    Help(String),
+    Site(String),
+    Rest(String),
+    Abort,
     Unknown(String),
 }
 
@@ -105,6 +111,7 @@ impl AsRef<str> for Command {
         match *self {
             Command::Acct => "ACCT",
             Command::Cwd(_) => "CWD",
+            Command::Size(_) => "SIZE",
             Command::Pass(_) => "PASS",
             Command::List(_) => "LIST",
             Command::NList(_) => "NLIST",
@@ -116,8 +123,10 @@ impl AsRef<str> for Command {
             Command::Quit => "QUIT",
             Command::Abort => "ABORT",
             Command::Rest(_) => "REST",
+            Command::Site(_) => "SITE",
             Command::Retr(_) => "RETR",
             Command::Rmd(_) => "RMD",
+            Command::Delete(_) => "DELE",
             Command::Rnfr(_) => "RNFR",
             Command::Rnto(_) => "RNTO",
             Command::Stor(_) => "STOR",
@@ -141,13 +150,10 @@ impl Command {
             .unwrap()
             .to_vec();
         // 先移除\r\
-        // debug!("command: {}", String::from_utf8(command.clone()).unwrap());
-        // to uppercase
         let command = String::from_utf8_lossy(&command).to_ascii_uppercase();
         let data = iter
             .next()
             .ok_or_else(|| Error::Msg("no command parameter".to_string()));
-        // let d = String::from_utf8_lossy(data?).to_string();
         let command = match command.as_bytes() {
             b"Acct" => Command::Acct,
             b"PASV" => Command::Pasv,
@@ -159,11 +165,13 @@ impl Command {
             b"NOOP" => Command::NoOp,
             b"REST" => Command::Rest(String::from_utf8_lossy(data?).to_string()),
             b"CWD" => Command::Cwd(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
+            b"SIZE" => Command::Size(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
             b"PASS" => Command::Pass(String::from_utf8_lossy(data?).to_string()),
             b"RETR" => Command::Retr(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
             b"RNFR" => Command::Rnfr(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
             b"RNTO" => Command::Rnto(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
             b"STOR" => Command::Stor(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
+            b"SITE" => Command::Site(String::from_utf8_lossy(data?).to_string()),
             b"STAT" => Command::Stat(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
             b"LIST" => Command::List(if data.is_ok() {
                 Some(PathBuf::from(String::from_utf8_lossy(data?).to_string()))
@@ -191,6 +199,7 @@ impl Command {
             b"HELP" => Command::Help(String::from_utf8_lossy(data?).to_string()),
             b"MKD" => Command::Mkd(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
             b"RMD" => Command::Rmd(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
+            b"DELE" => Command::Delete(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
             s => Command::Unknown(str::from_utf8(s).unwrap_or("").to_owned()),
         };
         Ok(command)
@@ -206,7 +215,6 @@ pub fn extract_port(data: &[u8]) -> Result<Command> {
                 .and_then(|s| u8::from_str(s).ok())
         })
         .collect::<Vec<u8>>();
-    // debug!("addr: {}", String::from_utf8(addr).unwrap());
     if addr.len() != 6 {
         return Err("Invalid address/port".into());
     }

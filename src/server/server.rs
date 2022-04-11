@@ -55,6 +55,7 @@ impl FtpServer {
 impl Handler for FtpServer {
     type Message = String;
     type Timeout = i32;
+    // Handling connection events
     fn ready(&mut self, event_loop: &mut EventLoop, token: Token, revent: EpollFlags) {
         if let Token::Listen(listen_fd) = token {
             let mut conn = Connection::accept(listen_fd);
@@ -75,6 +76,7 @@ impl Handler for FtpServer {
             }
         }
     }
+    // Handling IO and timer events
     fn notify(&mut self, _event_loop: &mut EventLoop, token: Token, revents: EpollFlags) {
         if let Token::Notify(fd) = token {
             let s = self.sessions.get(&fd).unwrap();
@@ -97,13 +99,11 @@ impl Handler for FtpServer {
         }
     }
 }
-
 pub fn run_server() {
     if already_running() {
         warn!("Already running...");
         return;
     }
-
     let config = Config::new(DEFAULT_CONF_FILE);
     debug!("config: {:?}", config);
     let addr = format!("{}:{}", config.server_addr, config.server_port);

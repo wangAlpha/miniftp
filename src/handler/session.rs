@@ -1,25 +1,27 @@
-use crate::handler::cmd::*;
 use crate::handler::codec::{Decoder, Encoder, FtpCodec};
 use crate::net::connection::Connection;
 use crate::net::event_loop::EventLoop;
 use crate::utils::config::Config;
 use crate::utils::utils::is_regular;
+use crate::{handler::cmd::*, utils::utils::is_exist};
 use crate::{is_blk, is_char, is_dir, is_link, is_pipe, is_reg, is_sock};
 use chrono::prelude::*;
 use log::{debug, info, warn};
 use nix::dir::{Dir, Type};
-use nix::fcntl::{open, OFlag};
+use nix::fcntl::{open, renameat, OFlag};
 use nix::sys::stat::{lstat, Mode, SFlag};
 use nix::sys::utsname::uname;
-use nix::unistd::{chdir, close, mkdir, unlink, write};
+use nix::unistd::{chdir, close, getcwd, mkdir, unlink, write};
+use nix::unistd::{Gid, Group, Uid, User};
+use std::collections::HashMap;
+use std::env::current_dir;
 use std::iter::Iterator;
 use std::net::TcpListener;
 use std::os::unix::prelude::AsRawFd;
 use std::path::{Component, Path, PathBuf};
 use std::string::String;
 use std::sync::{Arc, Mutex};
-use std::{collections::HashMap, time::Instant};
-use std::{env::current_dir, str::FromStr};
+use std::time::Instant;
 
 const KILOGYTE: f64 = 1024f64;
 const MEGA_BYTE: f64 = KILOGYTE * 1024f64;
@@ -43,7 +45,9 @@ impl Context {
 #[derive(Debug, Clone)]
 pub struct Session {
     cwd: PathBuf,
+    file_name: Option<String>,
     cmd_conn: Connection,
+    data_conn: Option<Connection>,
     data_port: Option<u16>,
     codec: FtpCodec,
     server_root: PathBuf,
@@ -57,6 +61,7 @@ pub struct Session {
     conn_map: Arc<Mutex<HashMap<i32, i32>>>, // <data fd, cmd fd>
     pasv_enable: bool,
     welcome: bool,
+    resume_point: i64,
 }
 
 impl Session {
@@ -67,8 +72,10 @@ impl Session {
         conn_map: &Arc<Mutex<HashMap<i32, i32>>>,
     ) -> Self {
         Session {
-            cwd: PathBuf::new(),
+            cwd: getcwd().unwrap(),
+            file_name: None,
             cmd_conn: conn,
+            data_conn: None,
             data_port: Some(22),
             codec: FtpCodec,
             server_root: current_dir().unwrap(),
@@ -82,6 +89,7 @@ impl Session {
             conn_map: conn_map.clone(),
             pasv_enable: config.pasv_enable,
             welcome: true,
+            resume_point: 0,
         }
     }
     pub fn handle_command(&mut self) {
@@ -105,57 +113,58 @@ impl Session {
         debug!("Cmd: {:?}", cmd);
         if self.is_logged() {
             match cmd.clone() {
+                // Access control commands
                 Command::Cwd(dir) => self.cwd(dir),
-                Command::List(path) => self.list(path),
-                Command::Pasv => self.pasv(),
+                Command::CdUp => self.cdup(),
+                // Transfer parameter commands
                 Command::Port(port) => self.port(port),
+                Command::Pasv => self.pasv(),
+                Command::Type(typ) => {
+                    self.transfer_type = typ;
+                    let message = format!("Opening {} mode to transfer files.", typ);
+                    self.send_answer(Answer::new(ResultCode::Ok, &message));
+                }
+                // Query commands
+                Command::List(path) => self.list(path),
+                Command::NList(path) => self.list(path),
                 Command::Pwd => self.pwd(),
+                Command::Size(path) => self.size(path),
+                // File control commands
                 Command::Stor(path) => self.stor(path),
-                Command::CdUp => self.cwd(PathBuf::from_str("..").unwrap()),
                 Command::Mkd(path) => self.mkd(path),
                 Command::Retr(path) => self.retr(path),
                 Command::Rmd(path) => self.rmd(path),
-                Command::Rnfr(path) => self.retr(path),
-                Command::Rnto(path) => self.retr(path),
+                Command::Delete(path) => self.delete(path),
+                Command::Rnfr(path) => self.rnfr(path),
+                Command::Rnto(path) => self.rnto(path),
+                Command::Site(content) => self.site(content),
+                Command::Rest(content) => self.rest(content),
+                // Others commands
                 Command::Abort => self.abort(),
                 _ => (),
             }
-        } else {
-            if let Command::Pass(content) = cmd.clone() {
-                let ok = if self.is_admin {
-                    content.eq(&self.config.admin.clone().unwrap())
-                } else {
-                    content.eq(&self.config.users[&(self.name.clone().unwrap())])
-                };
-                if ok {
-                    self.waiting_password = false;
-                    self.send_answer(Answer::new(
-                        ResultCode::Login,
-                        &format!("Welcome {}", self.name.clone().unwrap()),
-                    ));
-                } else {
-                    self.send_answer(Answer::new(
-                        ResultCode::LongPassMode,
-                        "Invalid password....",
-                    ));
-                }
-            }
+        } else if let Command::Pass(content) = cmd.clone() {
+            self.pass(content);
         }
+
         match cmd {
-            Command::Acct => {
-                self.send_answer(Answer::new(ResultCode::CmdNotImpl, "Not implemented"))
-            }
-            Command::Quit => self.quit(),
+            // Access control commands
             Command::User(content) => self.user(content),
-            Command::Type(typ) => {
-                self.transfer_type = typ;
-                let message = format!("Opening {} mode to transfer files.", typ);
-                self.send_answer(Answer::new(ResultCode::Ok, &message));
-            }
+            Command::Quit => self.quit(),
             Command::Syst => {
                 let sys = uname();
-                let message = format!("{} {} {}", sys.machine(), sys.nodename(), sys.version());
+                let message = format!(
+                    "{} {} {} {} {}",
+                    sys.sysname(),
+                    sys.nodename(),
+                    sys.release(),
+                    sys.version(),
+                    sys.machine(),
+                );
                 self.send_answer(Answer::new(ResultCode::Ok, &message));
+            }
+            Command::Acct => {
+                self.send_answer(Answer::new(ResultCode::CmdNotImpl, "Not implemented"))
             }
             Command::NoOp => self.send_answer(Answer::new(ResultCode::Ok, "Doing nothing")),
             Command::Unknown(s) => {
@@ -165,6 +174,26 @@ impl Session {
                 ));
             }
             _ => (),
+        }
+    }
+
+    fn pass(&mut self, content: String) {
+        let ok = if self.is_admin {
+            content.eq(&self.config.admin.clone().unwrap())
+        } else {
+            content.eq(&self.config.users[&(self.name.clone().unwrap())])
+        };
+        if ok {
+            self.waiting_password = false;
+            self.send_answer(Answer::new(
+                ResultCode::Login,
+                &format!("Welcome {}", self.name.clone().unwrap()),
+            ));
+        } else {
+            self.send_answer(Answer::new(
+                ResultCode::LongPassMode,
+                "Invalid password....",
+            ));
         }
     }
 
@@ -180,7 +209,7 @@ impl Session {
                 if content.eq(admin) {
                     self.is_admin = true;
                     name = Some(content.clone());
-                    pass_required = false;
+                    pass_required = !self.config.users[&(content.clone())].is_empty();
                 }
             }
             if name.is_none() {
@@ -214,10 +243,9 @@ impl Session {
             22
         };
         if self.pasv_enable {
-            let addr = format!("0.0.0.0:{}", port);
-            let listener = TcpListener::bind(addr).unwrap();
-            let c = Connection::accept(listener.as_raw_fd());
-            return Some(c);
+            let c = self.data_conn.to_owned();
+            self.data_conn = None;
+            return c;
         } else {
             let addr = format!("127.0.0.1:{}", port);
             let c = Connection::connect(&addr);
@@ -249,15 +277,122 @@ impl Session {
             ));
         }
     }
-    fn cwd(&mut self, dir: PathBuf) {
-        let path = self.cwd.join(&dir);
-        // TODO: check path invalid or exist
-        if invaild_path(&path) {
-            chdir(&path).expect("Change current directory fail");
-            self.cwd = path;
+    fn delete(&mut self, path: PathBuf) {
+        let mut ok = false;
+        let name = path.as_path().to_string_lossy().to_string();
+        if is_exist(name.as_str()) & is_regular(name.as_str()) {
+            match unlink(&path) {
+                Ok(_) => ok = true,
+                Err(e) => warn!("Couln't remove file, Err: {}", e),
+            }
+        }
+        if ok {
+            self.send_answer(Answer::new(
+                ResultCode::FileActOk,
+                &format!("File {} successufully removed", name),
+            ));
         } else {
             self.send_answer(Answer::new(
-                ResultCode::FileStatus,
+                ResultCode::FileNotFound,
+                &format!("Couldn't remove file {}", name),
+            ));
+        }
+    }
+    fn rnfr(&mut self, path: PathBuf) {
+        let file_name = path.as_path().to_string_lossy().to_string();
+        if is_exist(&file_name) && is_regular(&file_name) {
+            self.file_name = Some(file_name.clone());
+            self.send_answer(Answer::new(
+                ResultCode::FileActionPending,
+                &format!("Ready for rename file {}", file_name),
+            ));
+        } else {
+            self.send_answer(Answer::new(
+                ResultCode::FileNotFound,
+                &format!("Couldn't rename file {}", file_name),
+            ));
+        }
+    }
+    fn rnto(&mut self, path: PathBuf) {
+        let mut ok = false;
+        let new_file = path.as_path().to_string_lossy().to_string();
+        let old_path = self.file_name.clone();
+        if let Some(ref old_file) = self.file_name {
+            if is_exist(old_file.as_str()) && is_regular(old_file.as_str()) {
+                ok = renameat(None, Path::new(&old_file), None, Path::new(&new_file)).is_ok();
+            }
+        }
+        self.file_name = None;
+        if ok {
+            let message = format!(
+                "Rename file {} successful rename to {}",
+                old_path.unwrap(),
+                new_file
+            );
+            self.send_answer(Answer::new(ResultCode::FileActOk, &message));
+        } else {
+            self.send_answer(Answer::new(
+                ResultCode::FileNameNotAllow,
+                "Coldn't rename file",
+            ));
+        }
+    }
+    fn site(&mut self, content: String) {}
+    fn rest(&mut self, content: String) {
+        if let Ok(n) = content.parse::<i64>() {
+            self.resume_point = n;
+            let message = format!(
+                "Restarting at {}. execute get, put or append to initiate transfer",
+                n
+            );
+            self.send_answer(Answer::new(ResultCode::FileActionPending, &message));
+        } else {
+            self.send_answer(Answer::new(
+                ResultCode::BadCmdSeq,
+                "Couldn't restart break point",
+            ));
+        }
+    }
+    fn cwd(&mut self, dir: PathBuf) {
+        let path = self.cwd.join(&dir);
+        let mut ok = false;
+        // TODO: check path invalid or exist
+        // FIXME: cd .. error
+        if !invaild_path(&path) {
+            if let Ok(_) = chdir(&path) {
+                let current_dir = getcwd();
+                self.cwd = current_dir.unwrap();
+                ok = true;
+            }
+        }
+        if ok {
+            self.send_answer(Answer::new(
+                ResultCode::FileActOk,
+                "Change current path successfully",
+            ));
+        } else {
+            self.send_answer(Answer::new(
+                ResultCode::FileNotFound,
+                "No such file or directory",
+            ));
+        }
+    }
+    fn cdup(&mut self) {
+        let mut ok = false;
+
+        if let Ok(_) = chdir("..") {
+            let current_dir = getcwd();
+            self.cwd = current_dir.unwrap();
+            ok = true;
+        }
+        if ok {
+            self.send_answer(Answer::new(
+                ResultCode::FileActOk,
+                "Change current path successfully",
+            ));
+        } else {
+            self.send_answer(Answer::new(
+                ResultCode::FileNotFound,
                 "No such file or directory",
             ));
         }
@@ -271,7 +406,7 @@ impl Session {
                 "Starting to list directory...",
             ));
             let mut out = Vec::new();
-            if is_dir(&path.as_path()) {
+            if path.is_dir() {
                 let dir = Dir::open(path.as_os_str(), OFlag::O_DIRECTORY, Mode::S_IXUSR).unwrap();
                 let mut file_names = dir
                     .into_iter()
@@ -305,13 +440,35 @@ impl Session {
             port >> 8,
             port & 0xFF
         );
+        let addr = format!("0.0.0.0:{}", port);
+        let listener = TcpListener::bind(addr).unwrap();
         self.send_answer(Answer::new(ResultCode::PassMode, &message));
+        self.data_conn = Some(Connection::accept(listener.as_raw_fd()));
     }
     fn port(&mut self, port: u16) {
         self.pasv_enable = false;
         self.data_port = Some(port);
         let message = format!("PORT command successful, data port is now {}", port);
         self.send_answer(Answer::new(ResultCode::Ok, &message));
+    }
+    fn size(&mut self, path: PathBuf) {
+        let mut size = None;
+        // Check file whether exist
+        let file_name = path.to_string_lossy().to_string();
+        if is_exist(file_name.as_str()) && is_regular(file_name.as_str()) {
+            if let Ok(stat) = lstat(&path) {
+                size = Some(stat.st_size);
+            }
+        }
+        if let Some(size) = size {
+            let message = format!("{}", size);
+            self.send_answer(Answer::new(ResultCode::FileStatus, &message));
+        } else {
+            self.send_answer(Answer::new(
+                ResultCode::FileNotFound,
+                "Could not get file size.",
+            ));
+        }
     }
     fn pwd(&mut self) {
         let message = format!("{}", self.cwd.to_str().unwrap_or(""));
@@ -340,14 +497,12 @@ impl Session {
                 let instant = Instant::now();
                 match c.send_file(&path) {
                     Some(n) => {
-                        self.send_answer(Answer::new(
-                            ResultCode::CloseDataClose,
-                            "Transfer complete",
-                        ));
-                        debug!("Transfer {} complete", path);
+                        let message = format!("Transfer {} complete", path);
+                        self.send_answer(Answer::new(ResultCode::CloseDataClose, &message));
+                        info!("Transfer {} complete", path);
                         let elapsed = instant.elapsed().as_secs_f64();
                         let size = format_size(n as f64 / elapsed);
-                        info!("{} bytes received in {:.2} secs ({}B/s)", n, elapsed, size)
+                        info!("{} bytes send in {:.2} secs ({}B/s)", n, elapsed, size)
                     }
                     None => {
                         warn!("Can't send file {}", path);
@@ -357,7 +512,7 @@ impl Session {
             } else {
                 self.send_answer(Answer::new(
                     ResultCode::FileNotFound,
-                    "Failed to open file, please check file",
+                    &format!("Failed to open file {}, please check file", path),
                 ));
             }
             c.shutdown();
@@ -368,28 +523,32 @@ impl Session {
             ));
         }
     }
-
+    // example:
+    // local: hello remote: miniftp
+    // 200 PORT command successful. Consider using PASV.
+    // 150 Opening BINARY mode data connection for miniftp (21863760 bytes).
+    // 226 Transfer complete.
+    // 21863760 bytes received in 10.81 secs (1.9284 MB/s)
+    // FIXME: receive file size is not equal orginal file.
     fn stor(&mut self, path: PathBuf) {
-        // local: hello remote: miniftp
-        // 200 PORT command successful. Consider using PASV.
-        // 150 Opening BINARY mode data connection for miniftp (21863760 bytes).
-        // 226 Transfer complete.
-        // 21863760 bytes received in 10.81 secs (1.9284 MB/s)
-        if let Some(ref mut c) = self.get_data_conn() {
+        if let Some(mut c) = self.get_data_conn() {
             // check file path and admin
-
             let path = self.cwd.join(path);
             if !invaild_path(&path) && self.is_admin {
                 self.send_answer(Answer::new(
                     ResultCode::DataConnOpened,
                     "Starting to receive file...",
                 ));
-                let path = path.as_os_str();
+                let path = path.to_str().unwrap();
                 let oflag: OFlag = OFlag::O_CREAT | OFlag::O_RDWR;
                 let fd = open(path, oflag, Mode::all()).unwrap();
+                let instant = Instant::now();
                 let mut size = 0usize;
                 loop {
                     let buf = c.read_buf();
+                    if buf.is_empty() {
+                        break;
+                    }
                     match write(fd, &buf) {
                         Ok(0) | Err(_) => break,
                         Ok(n) => {
@@ -398,9 +557,21 @@ impl Session {
                         }
                     }
                 }
-                debug!("{} bytes received in xxx secs (xxx MB/s)", size);
+                let elapsed = instant.elapsed().as_secs_f64();
+                let size = format_size(size as f64 / elapsed);
+                info!(
+                    "{} bytes received in {:.2} secs ({}B/s)",
+                    size, elapsed, size
+                );
+                c.shutdown();
+                self.send_answer(Answer::new(
+                    ResultCode::CloseDataClose,
+                    &format!("Transfer file {} done", path),
+                ));
+            } else {
+                c.shutdown();
+                self.send_answer(Answer::new(ResultCode::FileNotFound, "Couldn't open file"));
             }
-            c.shutdown();
         } else {
             self.send_answer(Answer::new(
                 ResultCode::DataConnFail,
@@ -450,6 +621,7 @@ impl Session {
         self.cmd_conn.send(&buf);
     }
 }
+
 fn invaild_path(path: &Path) -> bool {
     for component in path.components() {
         if let Component::ParentDir = component {
@@ -457,17 +629,6 @@ fn invaild_path(path: &Path) -> bool {
         }
     }
     false
-}
-
-pub fn is_dir(path: &Path) -> bool {
-    let dir = path.as_os_str();
-    match lstat(dir) {
-        Ok(stat) => SFlag::S_IFDIR.bits() & stat.st_mode == SFlag::S_IFDIR.bits(),
-        Err(e) => {
-            warn!("Can't get file stat, {}", e);
-            false
-        }
-    }
 }
 
 pub fn permissions(mode: u32) -> String {
@@ -515,16 +676,18 @@ pub fn add_file_info(path: &str, out: &mut Vec<u8>) {
     let size = format_size(stat.st_size as f64);
     let rights = permissions(stat.st_mode);
     let links = stat.st_nlink;
-    let owner = stat.st_uid;
-    let group = stat.st_gid;
+    let user = User::from_uid(Uid::from_raw(stat.st_uid)).unwrap().unwrap();
+    let group = Group::from_gid(Gid::from_raw(stat.st_gid))
+        .unwrap()
+        .unwrap();
 
     let file_str = format!(
-        "{file_typ}{rights} {links:3} {owner:3} {group:3} {size}  {time} {path}{extra}\r\n",
+        "{file_typ}{rights} {links:3} {owner} {group} {size}  {time} {path}{extra}\r\n",
         file_typ = file_typ,
         rights = rights,
         links = links,
-        owner = owner,
-        group = group,
+        owner = user.name,
+        group = group.name,
         size = size,
         time = time,
         path = path,
@@ -542,31 +705,29 @@ pub fn format_size(st_size: f64) -> String {
     } else if st_size >= KILOGYTE {
         format!("{:6.2}K", st_size / KILOGYTE)
     } else {
-        format!("{:6.2}", st_size)
+        format!("{:7}", st_size)
     };
     size
 }
 
 pub fn remove_dir_all(path: &Path) -> bool {
-    if !is_dir(path) {
+    if !path.is_dir() {
         return false;
     }
     let dir = Dir::open(path, OFlag::O_DIRECTORY, Mode::S_IXUSR).unwrap();
     for entry in dir.into_iter() {
         let entry = entry.unwrap();
+        let file_name = entry.file_name().to_string_lossy().to_string();
         let path = Path::new(entry.file_name().to_str().unwrap());
         let file_type = entry.file_type().unwrap();
-        if file_type == Type::Directory {
-            remove_dir_all(path);
-        } else if file_type == Type::Symlink {
-            unlink(path).unwrap();
-        } else if file_type == Type::File {
-            // remove(path);
+        if file_name != "." && file_name != ".." {
+            if file_type == Type::Directory {
+                remove_dir_all(path);
+            } else {
+                unlink(path).expect(&format!("Couldn't unlink file {}", path.display()));
+            }
         }
     }
-    // TODO: how to delete file
-    // unsafe {
-    //     rmdir(path.as_os_str() as *const c_char);
-    // }
+    // unsafe { rmdir(path.as_os_str() as *const i8) != -1 }
     true
 }

@@ -91,7 +91,7 @@ impl Buffer {
     }
     pub fn read_buf(&mut self) -> Vec<u8> {
         let buf = self.bytes().to_vec();
-        self.read_index = buf.len();
+        self.read_index += buf.len();
         buf
     }
     pub fn append(&mut self, buf: &[u8]) {

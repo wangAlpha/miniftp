@@ -1,10 +1,15 @@
+use chrono::Local;
+use env_logger::Builder;
+use log::LevelFilter;
 use nix::fcntl::{flock, open, FlockArg, OFlag};
 use nix::libc::exit;
 use nix::sys::resource::*;
 use nix::sys::signal::{pthread_sigmask, signal};
 use nix::sys::signal::{SigHandler, SigSet, SigmaskHow, Signal};
 use nix::sys::stat::{lstat, umask, Mode, SFlag};
-use nix::unistd::{chdir, fork, ftruncate, getpid, setsid, write};
+use nix::unistd::{access, AccessFlags};
+use nix::unistd::{chdir, fork, ftruncate, getpid, getuid, setsid, write};
+use std::io::Write;
 
 const LOCK_FILE: &'static str = "/var/run/miniftp.pid";
 
@@ -20,6 +25,10 @@ pub fn is_link(path: &str) -> bool {
 pub fn is_dir(path: &str) -> bool {
     let stat = lstat(path).unwrap();
     stat.st_mode & SFlag::S_IFDIR.bits() == SFlag::S_IFDIR.bits()
+}
+
+pub fn is_exist(path: &str) -> bool {
+    access(path, AccessFlags::F_OK).is_ok()
 }
 
 pub fn daemonize() {
@@ -55,4 +64,25 @@ pub fn already_running() -> bool {
         Ok(0) | Err(_) => return true,
         _ => return false,
     }
+}
+
+pub fn is_root_user() -> bool {
+    getuid().is_root()
+}
+
+pub fn set_log_level(level: LevelFilter) {
+    Builder::new()
+        .format(|buf, record| {
+            writeln!(
+                buf,
+                "{} {} {}:{} - {}",
+                Local::now().format("%Y-%m-%d %H:%M:%S"),
+                record.level(),
+                record.file_static().unwrap(),
+                record.line().unwrap(),
+                record.args(),
+            )
+        })
+        .filter(None, level)
+        .init();
 }

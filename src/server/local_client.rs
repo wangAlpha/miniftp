@@ -228,17 +228,14 @@ impl LocalClient {
         let s = self.send_cmd("PASV").unwrap();
         println!("{}", s);
         let port = self.port + 1;
-        // let addr = format!("127.0.0.1:{}", port);
-        // self.data_conn = Some(Connection::connect(addr.as_str()));
     }
     fn port(&mut self) {
         // TODO: check status code
-        if let Some(c) = self.data_conn.clone() {
+        if let Some(ref mut c) = self.data_conn.clone() {
             c.shutdown();
             self.data_conn = None;
         }
         // FIXME: a connection bug
-        // get current local connection {port}
         // TODO: random port
         let port = self.port + 1;
         let cmd = format!("PORT 127,0,0,1,{},{}", port >> 8, 0xFF & port);

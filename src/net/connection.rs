@@ -153,11 +153,12 @@ impl Connection {
             EVENT_HUP | EVENT_ERR | EVENT_WRIT | EVENT_READ | EVENT_LEVEL,
         );
     }
-    pub fn deregister(&self, event_loop: &mut EventLoop) {
+    pub fn deregister(&mut self, event_loop: &mut EventLoop) {
         event_loop.deregister(self.fd);
         self.shutdown();
     }
-    pub fn shutdown(&self) {
+    pub fn shutdown(&mut self) {
+        self.state = State::Closed;
         match shutdown(self.fd, Shutdown::Both) {
             Ok(()) => (),
             Err(e) => warn!("Shutdown {} occur {} error", self.fd, e),
@@ -172,7 +173,7 @@ impl Connection {
     }
     pub fn send(&mut self, buf: &[u8]) {
         match write(self.fd, buf) {
-            Ok(n) => debug!("Send data len: {}", buf.len()),
+            Ok(n) => debug!("Send data len: {}", n),
             Err(e) => warn!("Send data error: {}", e),
         };
     }

@@ -1,26 +1,14 @@
-use chrono::Local;
-use env_logger::Builder;
-use log::LevelFilter;
-use miniftp::{self, local_client};
+use log::{info, LevelFilter};
+use miniftp::{self, is_root_user, local_client, set_log_level};
 use std::env;
-use std::io::Write;
 
 fn main() {
-    Builder::new()
-        .format(|buf, record| {
-            writeln!(
-                buf,
-                "{} {} {}:{} - {}",
-                Local::now().format("%Y-%m-%d %H:%M:%S"),
-                record.level(),
-                record.file_static().unwrap(),
-                record.line().unwrap(),
-                record.args(),
-            )
-        })
-        .filter(None, LevelFilter::Debug)
-        .init();
+    set_log_level(LevelFilter::Debug);
     if let Some(ref opt) = env::args().nth(1) {
+        if !is_root_user() {
+            info!("TinyFTPD: must be started as root user.");
+            return;
+        }
         if opt == "-c" {
             let mut client = local_client::LocalClient::new();
             println!("starting minFTP shell");
