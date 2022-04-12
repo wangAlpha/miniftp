@@ -175,8 +175,19 @@ fn main() {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::connection::Connection;
+    use nix::fcntl::open;
+    use nix::fcntl::OFlag;
+    use nix::sys::sendfile::sendfile;
+    use nix::sys::socket::socketpair;
+    use nix::sys::socket::{AddressFamily, InetAddr, Shutdown};
+    use nix::sys::socket::{SockFlag, SockProtocol, SockType};
+    use nix::sys::stat::{lstat, Mode};
+    use nix::unistd::close;
+    use nix::unistd::write;
     use std::fs::File;
     use std::os::unix::prelude::AsRawFd;
+    use std::thread;
     #[test]
     fn test_buffer_append() {
         let mut buf = Buffer::new();
@@ -235,5 +246,46 @@ mod tests {
         let size = buf.read(file.as_raw_fd()).unwrap();
         assert_eq!(size, metadata.len() as usize);
         assert_eq!(buf.readable_bytes(), metadata.len() as usize);
+    }
+    #[test]
+    fn test_buffer_read_write() {
+        let (rec_fd, send_fd) = socketpair(
+            AddressFamily::Unix,
+            SockType::Stream,
+            None,
+            SockFlag::empty(),
+        )
+        .unwrap();
+        let mut recv = Connection::new(rec_fd);
+        let mut send = Connection::new(send_fd);
+        let mut t = thread::spawn(move || {
+            let size = send.send_file("miniftp").unwrap();
+            println!("send file size: {}", size);
+            send.shutdown();
+        });
+        println!("Starting to recv file");
+        let oflag: OFlag = OFlag::O_CREAT | OFlag::O_RDWR;
+        let fd = open("test_miniftp", oflag, Mode::all()).unwrap();
+
+        let mut len = 0usize;
+        loop {
+            let buf = recv.read_buf();
+            println!("read buf size: {}", buf.len());
+            if buf.is_empty() {
+                break;
+            }
+            match write(fd, &buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    len += n;
+                    debug!("Receive data {}", buf.len());
+                }
+            }
+        }
+        close(fd).unwrap();
+        let stat = lstat("test_miniftp").unwrap();
+
+        println!("recv data size: {}, file size: {}", len, stat.st_size);
+        assert_eq!(stat.st_size, len);
     }
 }

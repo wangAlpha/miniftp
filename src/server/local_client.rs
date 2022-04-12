@@ -269,8 +269,7 @@ impl LocalClient {
             //     "Starting to send file...",
             // ));
             let fd = open(path, OFlag::O_RDONLY, Mode::all()).unwrap();
-            let lock = FileLock::new(fd);
-            lock.lock(false);
+            let _lock = FileLock::new(fd).lock(false);
 
             if is_regular(path.to_str().unwrap()) {
                 let len = get_file_size(path);

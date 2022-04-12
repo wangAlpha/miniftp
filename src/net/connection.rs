@@ -62,6 +62,7 @@ pub struct Connection {
     output_buf: Buffer,
     local_addr: String,
     peer_addr: String,
+    revents: EpollFlags,
 }
 
 impl Connection {
@@ -76,6 +77,7 @@ impl Connection {
             output_buf: Buffer::new(),
             local_addr,
             peer_addr,
+            revents: EpollFlags::empty(),
         }
     }
     pub fn bind(addr: &str) -> (i32, TcpListener) {
@@ -110,6 +112,12 @@ impl Connection {
     pub fn set_no_delay(&mut self, on: bool) {
         setsockopt(self.fd, sockopt::KeepAlive, &on).unwrap();
     }
+    pub fn set_revents(&mut self, revents: &EpollFlags) {
+        self.revents = revents.clone();
+    }
+    pub fn get_revents(&self) -> EpollFlags {
+        self.revents
+    }
     pub fn connected(&self) -> bool {
         self.state != State::Closed
     }
@@ -141,11 +149,6 @@ impl Connection {
     pub fn get_state(&self) -> State {
         self.state
     }
-    // pub fn get_msg(&mut self) -> Vec<u8> {
-    //     let buf = self.read_buf.to_owned();
-    //     self.read_buf.clear();
-    //     buf
-    // }
     pub fn register_read(&mut self, event_loop: &mut EventLoop) {
         // self.read_buf.clear();
         event_loop.reregister(
@@ -166,7 +169,7 @@ impl Connection {
     }
     // TODO: 限速发送，定时发送一部分
     pub fn send_file(&mut self, file: &str) -> Option<usize> {
-        let fd = open(file, OFlag::O_RDWR, Mode::all()).unwrap();
+        let fd = open(file, OFlag::O_RDWR, Mode::S_IRUSR).unwrap();
         let stat = fstat(fd).unwrap();
         let size = sendfile(self.fd, fd, None, stat.st_size as usize).unwrap();
         Some(size)

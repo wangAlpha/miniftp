@@ -57,7 +57,7 @@ pub enum Command {
     Pasv,
     // Query commands
     List(Option<PathBuf>),
-    NList(Option<PathBuf>),
+    NLst(Option<PathBuf>),
     Stat(PathBuf),
     Size(PathBuf),
     Help(String),
@@ -114,7 +114,7 @@ impl AsRef<str> for Command {
             Command::Size(_) => "SIZE",
             Command::Pass(_) => "PASS",
             Command::List(_) => "LIST",
-            Command::NList(_) => "NLIST",
+            Command::NLst(_) => "NLIST",
             Command::Mkd(_) => "MKD",
             Command::NoOp => "NOOP",
             Command::Port(_) => "PORT",
@@ -151,6 +151,7 @@ impl Command {
             .to_vec();
         // 先移除\r\
         let command = String::from_utf8_lossy(&command).to_ascii_uppercase();
+        let mut next = iter.next();
         let data = iter
             .next()
             .ok_or_else(|| Error::Msg("no command parameter".to_string()));
@@ -171,14 +172,15 @@ impl Command {
             b"RNFR" => Command::Rnfr(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
             b"RNTO" => Command::Rnto(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
             b"STOR" => Command::Stor(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
-            b"SITE" => Command::Site(String::from_utf8_lossy(data?).to_string()),
+            b"SITE" => Command::Site(data.
+                String::from_utf8_lossy(data?).to_string()),
             b"STAT" => Command::Stat(PathBuf::from(String::from_utf8_lossy(data?).to_string())),
             b"LIST" => Command::List(if data.is_ok() {
                 Some(PathBuf::from(String::from_utf8_lossy(data?).to_string()))
             } else {
                 Some(PathBuf::from_str(".").unwrap())
             }),
-            b"NLIST" => Command::NList(if data.is_ok() {
+            b"NLIST" => Command::NLst(if data.is_ok() {
                 Some(PathBuf::from(String::from_utf8_lossy(data?).to_string()))
             } else {
                 Some(PathBuf::from_str(".").unwrap())

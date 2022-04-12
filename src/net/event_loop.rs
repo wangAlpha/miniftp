@@ -28,7 +28,7 @@ pub enum Token {
 pub trait Handler: Sized {
     type Timeout;
     type Message;
-    fn ready(&mut self, event_loop: &mut EventLoop, token: Token, typ: EpollFlags);
+    fn ready(&mut self, event_loop: &mut EventLoop, token: Token);
     fn notify(&mut self, event_loop: &mut EventLoop, token: Token, revent: EpollFlags);
 }
 
@@ -76,7 +76,7 @@ impl EventLoop {
     fn is_timer_event(&self, fd: i32) -> bool {
         self.timers.lock().unwrap().contains_key(&fd)
     }
-    pub fn add_timer<F>(&mut self, interval: i64) {
+    pub fn add_timer(&mut self, interval: i64) {
         let timer_fd = TimerFd::new(
             ClockId::CLOCK_MONOTONIC,
             TimerFlags::TFD_CLOEXEC | TimerFlags::TFD_NONBLOCK,
@@ -111,7 +111,7 @@ impl EventLoop {
             for i in 0..cnt {
                 let (fd, event) = self.poller.event(i);
                 if self.is_listen_event(fd) {
-                    ready_channels.push((Token::Listen(fd), event));
+                    ready_channels.push(Token::Listen(fd));
                 } else if self.is_timer_event(fd) {
                     timer_channels.push((Token::Timer(fd), event));
                 } else {
@@ -119,8 +119,8 @@ impl EventLoop {
                 };
             }
             // io ready event: listen event
-            for &(token, event) in ready_channels.iter() {
-                handler.ready(self, token, event.events());
+            for &token in ready_channels.iter() {
+                handler.ready(self, token);
             }
             // io read and write event
             for &(token, event) in notify_channels.iter() {

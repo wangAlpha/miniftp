@@ -1,6 +1,8 @@
 use crate::handler::codec::{Decoder, Encoder, FtpCodec};
 use crate::net::connection::Connection;
+use crate::net::connection::EventSet;
 use crate::net::event_loop::EventLoop;
+use crate::server::record_lock::FileLock;
 use crate::utils::config::Config;
 use crate::utils::utils::is_regular;
 use crate::{handler::cmd::*, utils::utils::is_exist};
@@ -9,13 +11,13 @@ use chrono::prelude::*;
 use log::{debug, info, warn};
 use nix::dir::{Dir, Type};
 use nix::fcntl::{open, renameat, OFlag};
+use nix::sys::epoll::EpollFlags;
 use nix::sys::stat::{lstat, Mode, SFlag};
 use nix::sys::utsname::uname;
-use nix::unistd::{chdir, close, getcwd, mkdir, unlink, write};
-use nix::unistd::{Gid, Group, Uid, User};
+use nix::unistd::{chdir, close, ftruncate, getcwd, lseek, mkdir, unlink, write};
+use nix::unistd::{Gid, Group, Uid, User, Whence};
 use std::collections::HashMap;
 use std::env::current_dir;
-use std::iter::Iterator;
 use std::net::TcpListener;
 use std::os::unix::prelude::AsRawFd;
 use std::path::{Component, Path, PathBuf};
@@ -62,6 +64,7 @@ pub struct Session {
     pasv_enable: bool,
     welcome: bool,
     resume_point: i64,
+    help_map: HashMap<&'static str, &'static str>,
 }
 
 impl Session {
@@ -90,9 +93,11 @@ impl Session {
             pasv_enable: config.pasv_enable,
             welcome: true,
             resume_point: 0,
+            help_map: Self::get_help_map(),
         }
     }
     pub fn handle_command(&mut self) {
+        // if revents.is_reable()
         if !self.cmd_conn.connected() {
             debug!("Session command is disconnnectd");
             return;
@@ -125,10 +130,11 @@ impl Session {
                     self.send_answer(Answer::new(ResultCode::Ok, &message));
                 }
                 // Query commands
-                Command::List(path) => self.list(path),
-                Command::NList(path) => self.list(path),
+                Command::List(path) => self.list(path, true),
+                Command::NLst(path) => self.list(path, false),
                 Command::Pwd => self.pwd(),
                 Command::Size(path) => self.size(path),
+                Command::Help(content) => self.help(content),
                 // File control commands
                 Command::Stor(path) => self.stor(path),
                 Command::Mkd(path) => self.mkd(path),
@@ -252,20 +258,39 @@ impl Session {
             return Some(c);
         }
     }
+    pub fn set_revents(&mut self, revents: &EpollFlags) {
+        self.cmd_conn.set_revents(revents);
+    }
     fn is_logged(&self) -> bool {
         self.name.is_some() && !self.waiting_password
     }
     fn mkd(&mut self, path: PathBuf) {
-        let path = self.cwd.join(&path);
-        match mkdir(&path, Mode::S_IRWXU) {
-            Ok(_) => debug!("created {:?}", path),
-            Err(e) => println!("Error creating directory: {}", e),
+        let mut ok = false;
+        let path = self.cwd.join(&path).as_path().to_string_lossy().to_string();
+        if !is_exist(path.as_str()) {
+            match mkdir(path.as_str(), Mode::S_IRWXU) {
+                Ok(_) => {
+                    debug!("created {:?}", path);
+                    ok = true;
+                }
+                Err(e) => println!("Error creating directory: {}", e),
+            }
+        }
+        if ok {
+            let message = &format!("Folder {} successfully created!", path);
+            self.send_answer(Answer::new(ResultCode::FileActOk, &message));
+        } else {
+            self.send_answer(Answer::new(
+                ResultCode::FileNameNotAllow,
+                "Couldn't create folder",
+            ));
         }
     }
     fn rmd(&mut self, path: PathBuf) {
         let path = self.cwd.join(path);
+        let dir = path.as_path();
         // TODO: check path
-        if invaild_path(&path) && remove_dir_all(&path) {
+        if is_exist(dir.to_str().unwrap()) && dir.is_dir() && remove_dir_all(&path) {
             self.send_answer(Answer::new(
                 ResultCode::FileActOk,
                 "Folder successufully removed",
@@ -280,7 +305,7 @@ impl Session {
     fn delete(&mut self, path: PathBuf) {
         let mut ok = false;
         let name = path.as_path().to_string_lossy().to_string();
-        if is_exist(name.as_str()) & is_regular(name.as_str()) {
+        if is_exist(name.as_str()) && is_regular(name.as_str()) {
             match unlink(&path) {
                 Ok(_) => ok = true,
                 Err(e) => warn!("Couln't remove file, Err: {}", e),
@@ -337,7 +362,9 @@ impl Session {
             ));
         }
     }
-    fn site(&mut self, content: String) {}
+    fn site(&mut self, content: String) {
+        debug!("Site: {}", content);
+    }
     fn rest(&mut self, content: String) {
         if let Ok(n) = content.parse::<i64>() {
             self.resume_point = n;
@@ -355,11 +382,11 @@ impl Session {
     }
     fn cwd(&mut self, dir: PathBuf) {
         let path = self.cwd.join(&dir);
+        let directory = path.to_str().unwrap();
         let mut ok = false;
-        // TODO: check path invalid or exist
-        // FIXME: cd .. error
-        if !invaild_path(&path) {
-            if let Ok(_) = chdir(&path) {
+        // check path invalid or exist
+        if is_exist(directory) && dir.is_dir() {
+            if let Ok(_) = chdir(directory) {
                 let current_dir = getcwd();
                 self.cwd = current_dir.unwrap();
                 ok = true;
@@ -397,7 +424,7 @@ impl Session {
             ));
         }
     }
-    fn list(&mut self, path: Option<PathBuf>) {
+    fn list(&mut self, path: Option<PathBuf>, add_info: bool) {
         if let Some(mut c) = self.get_data_conn() {
             let path = self.cwd.join(path.unwrap_or_default());
             // let directory = PathBuf::from(&path);
@@ -413,10 +440,20 @@ impl Session {
                     .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
                     .collect::<Vec<String>>();
                 file_names.sort();
-                file_names.iter().for_each(|s| add_file_info(s, &mut out));
+                if add_info {
+                    file_names.iter().for_each(|s| add_file_info(s, &mut out));
+                } else {
+                    file_names
+                        .iter()
+                        .for_each(|s| out.extend(format!("{}\r\n", s).as_bytes()));
+                }
             } else {
                 let path = path.as_os_str().to_str().unwrap();
-                add_file_info(path, &mut out);
+                if add_info {
+                    add_file_info(path, &mut out);
+                } else {
+                    out.extend(format!("{}\r\n", path).as_bytes());
+                }
             }
             c.send(&out);
             c.shutdown();
@@ -542,8 +579,20 @@ impl Session {
                 let path = path.to_str().unwrap();
                 let oflag: OFlag = OFlag::O_CREAT | OFlag::O_RDWR;
                 let fd = open(path, oflag, Mode::all()).unwrap();
+                let _lock = FileLock::new(fd).lock(true);
+                if self.resume_point <= 0 {
+                    ftruncate(fd, 0).expect("Couldn't ftruncate file at 0");
+                    lseek(fd, 0, Whence::SeekSet)
+                        .expect(&format!("Couldn't lseek file: {} at {}", path, 0));
+                } else {
+                    lseek(fd, self.resume_point, Whence::SeekSet).expect(&format!(
+                        "Couldn't lseek file: {} at {}",
+                        path, self.resume_point
+                    ));
+                    self.resume_point = 0;
+                }
                 let instant = Instant::now();
-                let mut size = 0usize;
+                let mut len = 0usize;
                 loop {
                     let buf = c.read_buf();
                     if buf.is_empty() {
@@ -552,16 +601,17 @@ impl Session {
                     match write(fd, &buf) {
                         Ok(0) | Err(_) => break,
                         Ok(n) => {
-                            size += n;
+                            len += n;
                             debug!("Receive data {}", buf.len());
                         }
                     }
                 }
+                close(fd).unwrap();
                 let elapsed = instant.elapsed().as_secs_f64();
-                let size = format_size(size as f64 / elapsed);
+                let size = format_size(len as f64 / elapsed);
                 info!(
                     "{} bytes received in {:.2} secs ({}B/s)",
-                    size, elapsed, size
+                    len, elapsed, size
                 );
                 c.shutdown();
                 self.send_answer(Answer::new(
@@ -579,7 +629,60 @@ impl Session {
             ));
         }
     }
-    fn abort(&mut self) {}
+    fn help(&mut self, content: String) {
+        if self.help_map.contains_key(&content.as_str()) {
+            let message = self.help_map[&content.as_str()];
+            self.send_answer(Answer::new(ResultCode::HelpMsg, &message));
+        } else {
+            self.send_answer(Answer::new(
+                ResultCode::SyntaxErr,
+                &format!("?Invalid help command {}", content),
+            ));
+        }
+    }
+    fn get_help_map() -> HashMap<&'static str, &'static str> {
+        HashMap::from([
+            ("open", "open hostname [ port ] - open new connection"),
+            ("user", "user username - send new user information"),
+            (
+                "cd",
+                "cd remote-directory - change remote working directory",
+            ),
+            (
+                "ls",
+                "ls [ remote-directory ] - print list of files in the remote directory",
+            ),
+            (
+                "put",
+                "put local-file [ remote-file ] - store a file at the server",
+            ),
+            (
+                "pwd",
+                "get remote-file [ local-file ] - retrieve a copy of the file",
+            ),
+            ("mkdir", "pwd - print the current working directory name"),
+            (
+                "rmdir",
+                "mkdir directory-name - make a directory on the remote machine",
+            ),
+            ("del", "rmdir directory-name - remove a directory"),
+            ("del", "del remote-file - delete a file"),
+            ("binary", "binary - set binary transfer type"),
+            ("size", "size remote-file - show size of remote file"),
+            ("stat", "stat [ remote-file ] - print server information"),
+            ("syst", "syst - show remote system type"),
+            ("noop", "noop - no operation"),
+            ("close", "close - close current connection"),
+            ("help", "help - print list of ftp commands"),
+            ("exit", "exit - exit program"),
+        ])
+    }
+    fn abort(&mut self) {
+        self.send_answer(Answer::new(
+            ResultCode::CloseDataClose,
+            "No transfer to Abort!",
+        ));
+    }
     pub fn receive_data(
         &mut self,
         msg: Vec<u8>,
@@ -628,7 +731,7 @@ fn invaild_path(path: &Path) -> bool {
             return true;
         }
     }
-    false
+    true
 }
 
 pub fn permissions(mode: u32) -> String {

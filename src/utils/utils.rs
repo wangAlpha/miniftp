@@ -76,9 +76,9 @@ pub fn set_log_level(level: LevelFilter) {
             writeln!(
                 buf,
                 "{} {} {}:{} - {}",
-                Local::now().format("%Y-%m-%d %H:%M:%S"),
+                Local::now().format("%m-%d %H:%M:%S"),
                 record.level(),
-                record.file_static().unwrap(),
+                record.file().unwrap(),
                 record.line().unwrap(),
                 record.args(),
             )
