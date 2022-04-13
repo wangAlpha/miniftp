@@ -3,12 +3,12 @@ use env_logger::Builder;
 use log::LevelFilter;
 use nix::fcntl::{flock, open, FlockArg, OFlag};
 use nix::libc::exit;
-use nix::sys::resource::*;
 use nix::sys::signal::{pthread_sigmask, signal};
 use nix::sys::signal::{SigHandler, SigSet, SigmaskHow, Signal};
 use nix::sys::stat::{lstat, umask, Mode, SFlag};
 use nix::unistd::{access, AccessFlags};
 use nix::unistd::{chdir, fork, ftruncate, getpid, getuid, setsid, write};
+use nix::unistd::{Uid, User};
 use std::io::Write;
 
 const LOCK_FILE: &'static str = "/var/run/miniftp.pid";
@@ -32,8 +32,8 @@ pub fn is_exist(path: &str) -> bool {
 }
 
 pub fn daemonize() {
-    umask(Mode::empty());
-    getrlimit(Resource::RLIMIT_NOFILE).expect("get trlimit failed!");
+    umask(Mode::from_bits(0x666).unwrap());
+    // let (r, l) = getrlimit(Resource::RLIMIT_NOFILE).expect("get trlimit failed!");
     let result = unsafe { fork().expect("cant't fork a new process") };
     if result.is_parent() {
         unsafe { exit(0) };
@@ -44,7 +44,8 @@ pub fn daemonize() {
     }
     pthread_sigmask(SigmaskHow::SIG_BLOCK, Some(&SigSet::all()), None).unwrap();
     setsid().expect("can't set sid");
-    chdir("/").unwrap();
+    let root = User::from_uid(Uid::from_raw(0)).unwrap().unwrap();
+    chdir(&root.dir).expect("Couldn't cd to root directory");
 }
 
 pub fn already_running() -> bool {

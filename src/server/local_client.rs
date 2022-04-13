@@ -196,7 +196,8 @@ impl LocalClient {
 
     fn send_file(&mut self, file: &str) -> usize {
         if let Some(ref mut c) = self.data_conn {
-            return c.send_file(file).unwrap_or(0);
+            let len = lstat(file).unwrap().st_size as usize;
+            return c.send_file(Some(file), 0, len).unwrap_or(0);
         }
         0
     }

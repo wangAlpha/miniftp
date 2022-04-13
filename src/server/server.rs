@@ -6,7 +6,7 @@ use crate::net::queue::{BlockingQueue, BlockingQueueRef};
 use crate::net::sorted_list::TimerList;
 use crate::threadpool::threadpool::ThreadPool;
 use crate::utils::config::{Config, DEFAULT_CONF_FILE};
-use crate::utils::utils::already_running;
+use crate::utils::utils::{already_running, daemonize};
 use log::{debug, info, warn};
 use nix::sys::epoll::EpollFlags;
 use nix::unistd::read;
@@ -113,6 +113,8 @@ pub fn run_server() {
         warn!("Already running...");
         return;
     }
+    // daemonize();
+
     let config = Config::new(DEFAULT_CONF_FILE);
     debug!("config: {:?}", config);
     let addr = format!("{}:{}", config.server_addr, config.server_port);

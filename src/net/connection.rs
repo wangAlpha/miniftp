@@ -9,8 +9,8 @@ use nix::sys::socket::shutdown;
 use nix::sys::socket::{accept4, connect, getpeername, getsockname, setsockopt, socket, sockopt};
 use nix::sys::socket::{AddressFamily, InetAddr, Shutdown};
 use nix::sys::socket::{SockAddr, SockFlag, SockProtocol, SockType};
-use nix::sys::stat::{fstat, Mode};
-use nix::unistd::write;
+use nix::sys::stat::Mode;
+use nix::unistd::{close, write};
 use std::net::{SocketAddr, TcpListener};
 use std::os::unix::prelude::AsRawFd;
 use std::str::FromStr;
@@ -168,16 +168,23 @@ impl Connection {
         }
     }
     // TODO: 限速发送，定时发送一部分
-    pub fn send_file(&mut self, file: &str) -> Option<usize> {
-        let fd = open(file, OFlag::O_RDWR, Mode::S_IRUSR).unwrap();
-        let stat = fstat(fd).unwrap();
-        let size = sendfile(self.fd, fd, None, stat.st_size as usize).unwrap();
-        Some(size)
+    pub fn send_file(&mut self, file: Option<&str>, fd: i32, size: usize) -> Option<usize> {
+        if let Some(file) = file {
+            let fd = open(file, OFlag::O_RDWR, Mode::S_IRUSR).unwrap();
+            let size = sendfile(self.fd, fd, None, size).unwrap();
+            close(fd).expect("Couldn't close file");
+            return Some(size);
+        } else {
+            let size = sendfile(self.fd, fd, None, size).unwrap();
+            return Some(size);
+        }
     }
     pub fn send(&mut self, buf: &[u8]) {
         match write(self.fd, buf) {
-            Ok(n) => debug!("Send data len: {}", n),
-            Err(e) => warn!("Send data error: {}", e),
+            Ok(_) => (),
+            Err(e) => {
+                warn!("Send data error: {}", e)
+            }
         };
     }
     pub fn read_buf(&mut self) -> Vec<u8> {

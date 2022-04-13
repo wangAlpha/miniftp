@@ -181,7 +181,7 @@ mod tests {
     use nix::sys::sendfile::sendfile;
     use nix::sys::socket::socketpair;
     use nix::sys::socket::{AddressFamily, InetAddr, Shutdown};
-    use nix::sys::socket::{SockFlag, SockProtocol, SockType};
+    use nix::sys::socket::{SockFlag, SockType};
     use nix::sys::stat::{lstat, Mode};
     use nix::unistd::close;
     use nix::unistd::write;
@@ -258,8 +258,11 @@ mod tests {
         .unwrap();
         let mut recv = Connection::new(rec_fd);
         let mut send = Connection::new(send_fd);
-        let mut t = thread::spawn(move || {
-            let size = send.send_file("miniftp").unwrap();
+        let mut _t = thread::spawn(move || {
+            let stat = lstat("miniftp").unwrap();
+            let size = send
+                .send_file(Some("miniftp"), 0, stat.st_size as usize)
+                .unwrap();
             println!("send file size: {}", size);
             send.shutdown();
         });
@@ -286,6 +289,6 @@ mod tests {
         let stat = lstat("test_miniftp").unwrap();
 
         println!("recv data size: {}, file size: {}", len, stat.st_size);
-        assert_eq!(stat.st_size, len);
+        assert_eq!(stat.st_size, len as i64);
     }
 }
