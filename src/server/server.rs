@@ -6,25 +6,23 @@ use crate::net::queue::{BlockingQueue, BlockingQueueRef};
 use crate::net::sorted_list::TimerList;
 use crate::threadpool::threadpool::ThreadPool;
 use crate::utils::config::{Config, DEFAULT_CONF_FILE};
-use crate::utils::utils::{already_running, daemonize};
+use crate::utils::utils::already_running;
+use crate::utils::utils::daemonize;
 use log::{debug, info, warn};
 use nix::sys::epoll::EpollFlags;
 use nix::unistd::read;
-use std::collections::HashMap;
 use std::os::unix::prelude::AsRawFd;
 use std::sync::{Arc, Mutex};
 
-const DEFAULT_TIME_OUT: u64 = 30; // time (s)
+const DEFAULT_TIME_OUT: u64 = 90; // time (s)
 const DEFAULT_TIMER: i64 = 2;
 type TaskQueueRef = BlockingQueueRef<Arc<Mutex<Session>>>;
 
 pub struct FtpServer {
     request_queue: TaskQueueRef,
     worker_pool: ThreadPool,
-    conn_list: HashMap<i32, Arc<Mutex<Connection>>>,
     sessions: TimerList<i32, Arc<Mutex<Session>>>, // <cmd_fd, session_ref>
     event_loop: EventLoop,
-    conn_map: Arc<Mutex<HashMap<i32, i32>>>, // <cmd_fd, data fd>
     config: Config,
 }
 
@@ -43,10 +41,8 @@ impl FtpServer {
         FtpServer {
             request_queue: q,
             worker_pool: pool,
-            conn_list: HashMap::new(),
             sessions: TimerList::new(DEFAULT_TIME_OUT),
             event_loop: event_loop.clone(),
-            conn_map: Arc::new(Mutex::new(HashMap::new())),
             config,
         }
     }
@@ -64,7 +60,7 @@ impl Handler for FtpServer {
 
             if self.config.max_clients > self.sessions.len() {
                 conn.register_read(event_loop);
-                let s = Session::new(&self.config, conn, event_loop, &self.conn_map);
+                let s = Session::new(&self.config, conn, event_loop);
                 self.sessions.insert(fd, Arc::new(Mutex::new(s)));
             } else {
                 warn!(
@@ -93,18 +89,16 @@ impl Handler for FtpServer {
                 event_loop.deregister(fd);
             }
         } else if let Token::Timer(fd) = token {
-            // 注销一些最不活跃的session
+            // Log out of some idle sessions.
             let old_len = self.sessions.len();
-            // self.sessions.remove_idle();
+            self.sessions.remove_idle();
             let new_len = self.sessions.len();
             if old_len != new_len {
-                debug!(
-                    "Remove idle connection, old len:{}, new len: {}",
-                    old_len, new_len
-                );
+                debug!("Remove idle session, new len: {}", new_len);
             }
             let mut _buf = [0u8; 8];
-            read(fd, &mut _buf).unwrap_or_default(); // 读取这个 timer_fd
+            // Read this timer_fd otherwise repeated events are triggered.
+            read(fd, &mut _buf).unwrap_or_default();
         }
     }
 }
@@ -113,10 +107,10 @@ pub fn run_server() {
         warn!("Already running...");
         return;
     }
-    // daemonize();
+    daemonize();
 
     let config = Config::new(DEFAULT_CONF_FILE);
-    debug!("config: {:?}", config);
+    // debug!("config: {}", config);
     let addr = format!("{}:{}", config.server_addr, config.server_port);
     let (_, listener) = Connection::bind(&addr);
     info!(

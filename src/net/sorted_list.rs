@@ -30,14 +30,20 @@ impl<K: Hash + Eq, V> TimerList<K, V> {
         self.list.put(k, (Instant::now(), v));
     }
     pub fn get<'a>(&'a mut self, k: &K) -> Option<&'a V> {
-        match self.list.get(k) {
-            Some((_, v)) => Some(v),
+        match self.list.get_mut(k) {
+            Some((t, v)) => {
+                *t = Instant::now();
+                Some(v)
+            }
             None => None,
         }
     }
     pub fn get_mut<'a>(&'a mut self, k: &K) -> Option<&'a V> {
         match self.list.get_mut(k) {
-            Some((_, v)) => Some(v),
+            Some((t, v)) => {
+                *t = Instant::now();
+                Some(v)
+            }
             None => None,
         }
     }
@@ -51,9 +57,11 @@ impl<K: Hash + Eq, V> TimerList<K, V> {
         while !self.list.is_empty() {
             match self.list.last() {
                 Some((instant, _)) => {
-                    if self.timeout > instant.elapsed().as_secs() {
+                    if self.timeout < instant.elapsed().as_secs() {
                         // debug!("Idle node: {}, time: {}", node, instant.elapsed().as_secs());
                         self.list.remove_last();
+                    } else {
+                        break;
                     }
                 }
                 None => break,
@@ -269,7 +277,7 @@ impl<K: Hash + Eq, V> SortedList<K, V> {
             let mut old_node = self.map.remove(&old_key).unwrap();
             let node_ptr: NodePtr<K, V> = &mut *old_node;
             self.detach(node_ptr);
-            // Reture smart pointer
+            // Return smart pointer
             Some(old_node)
         } else {
             None

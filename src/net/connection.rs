@@ -167,15 +167,27 @@ impl Connection {
             Err(e) => warn!("Shutdown {} occur {} error", self.fd, e),
         }
     }
-    // TODO: 限速发送，定时发送一部分
-    pub fn send_file(&mut self, file: Option<&str>, fd: i32, size: usize) -> Option<usize> {
+    // 限速发送，定时发送一部分
+    pub fn send_file(
+        &mut self,
+        file: Option<&str>,
+        fd: i32,
+        off: Option<i64>,
+        size: usize,
+    ) -> Option<usize> {
+        let mut off64 = off.unwrap_or(0);
+        let off = if off.is_none() {
+            None
+        } else {
+            Some(&mut off64)
+        };
         if let Some(file) = file {
             let fd = open(file, OFlag::O_RDWR, Mode::S_IRUSR).unwrap();
-            let size = sendfile(self.fd, fd, None, size).unwrap();
+            let size = sendfile(self.fd, fd, off, size).unwrap();
             close(fd).expect("Couldn't close file");
             return Some(size);
         } else {
-            let size = sendfile(self.fd, fd, None, size).unwrap();
+            let size = sendfile(self.fd, fd, off, size).unwrap();
             return Some(size);
         }
     }

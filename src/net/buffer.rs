@@ -261,7 +261,7 @@ mod tests {
         let mut _t = thread::spawn(move || {
             let stat = lstat("miniftp").unwrap();
             let size = send
-                .send_file(Some("miniftp"), 0, stat.st_size as usize)
+                .send_file(Some("miniftp"), 0, 0, stat.st_size as usize)
                 .unwrap();
             println!("send file size: {}", size);
             send.shutdown();

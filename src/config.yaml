@@ -3,12 +3,12 @@ server_port: 8089
 pasv_enable: false
 pasv_port:
   - 2222
-  - 2225
+  - 4444
 max_clients: 1024
 ssl_enable: false
 rsa_cert_file: ~
 rsa_private_key_file: ~
 admin: "liwang"
 users:
-  liwang: ""
-  anonymous: ""
+  liwang: "123456"
+  anonymous: "123456"

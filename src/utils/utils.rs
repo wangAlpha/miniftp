@@ -33,11 +33,10 @@ pub fn is_exist(path: &str) -> bool {
 
 pub fn daemonize() {
     umask(Mode::from_bits(0x666).unwrap());
-    // let (r, l) = getrlimit(Resource::RLIMIT_NOFILE).expect("get trlimit failed!");
-    let result = unsafe { fork().expect("cant't fork a new process") };
-    if result.is_parent() {
-        unsafe { exit(0) };
-    }
+    // let result = unsafe { fork().expect("cant't fork a new process") };
+    // if result.is_parent() {
+    //     unsafe { exit(0) };
+    // }
     unsafe {
         signal(Signal::SIGPIPE, SigHandler::SigIgn).unwrap();
         signal(Signal::SIGHUP, SigHandler::SigIgn).unwrap();
@@ -72,18 +71,18 @@ pub fn is_root_user() -> bool {
 }
 
 pub fn set_log_level(level: LevelFilter) {
-    Builder::new()
-        .format(|buf, record| {
-            writeln!(
-                buf,
-                "{} {} {}:{} - {}",
-                Local::now().format("%m-%d %H:%M:%S"),
-                record.level(),
-                record.file().unwrap(),
-                record.line().unwrap(),
-                record.args(),
-            )
-        })
-        .filter(None, level)
-        .init();
+    let mut builder = Builder::new();
+    builder.format(|buf, record| {
+        writeln!(
+            buf,
+            "{} {} {}:{} - {}",
+            Local::now().format("%m-%d %H:%M:%S"),
+            record.level(),
+            record.file().unwrap(),
+            record.line().unwrap(),
+            record.args(),
+        )
+    });
+    builder.parse_env("RUST_LOG");
+    builder.filter(None, level).init();
 }

@@ -2,7 +2,6 @@ use crate::handler::codec::{Decoder, Encoder, FtpCodec};
 use crate::handler::speed_barrier::SpeedBarrier;
 use crate::handler::speed_barrier::DEFAULT_MAX_SPEED;
 use crate::net::connection::Connection;
-use crate::net::connection::EventSet;
 use crate::net::event_loop::EventLoop;
 use crate::server::record_lock::FileLock;
 use crate::utils::config::Config;
@@ -68,7 +67,6 @@ pub struct Session {
     waiting_password: bool,
     event_loop: EventLoop,
     config: Config,
-    conn_map: Arc<Mutex<HashMap<i32, i32>>>, // <data fd, cmd fd>
     pasv_enable: bool,
     welcome: bool,
     resume_point: i64,
@@ -76,12 +74,7 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(
-        config: &Config,
-        conn: Connection,
-        event_loop: &EventLoop,
-        conn_map: &Arc<Mutex<HashMap<i32, i32>>>,
-    ) -> Self {
+    pub fn new(config: &Config, conn: Connection, event_loop: &EventLoop) -> Self {
         let root = User::from_uid(Uid::from_raw(0)).unwrap().unwrap();
         Session {
             cur_dir: canonicalize(root.dir.clone()).unwrap(),
@@ -98,7 +91,6 @@ impl Session {
             curr_file_context: None,
             name: None,
             config: config.clone(),
-            conn_map: conn_map.clone(),
             pasv_enable: config.pasv_enable,
             welcome: true,
             resume_point: 0,
@@ -194,7 +186,7 @@ impl Session {
     // TODO: check passwd, and cd to current user directory
     fn pass(&mut self, content: String) {
         let ok = if self.is_admin {
-            content.eq(&self.config.admin.clone().unwrap())
+            content.eq(&self.config.users[&self.name.clone().unwrap()])
         } else {
             content.eq(&self.config.users[&(self.name.clone().unwrap())])
         };
@@ -592,17 +584,17 @@ impl Session {
                 let instant = Instant::now();
                 let fd = open(path, OFlag::O_RDWR, Mode::S_IRUSR).unwrap();
                 let size = lstat(path).unwrap().st_size as usize;
-                let mut barrier = SpeedBarrier::new(DEFAULT_MAX_SPEED);
+                // let mut barrier = SpeedBarrier::new(DEFAULT_MAX_SPEED);
                 let mut len = 0usize;
                 loop {
-                    match c.send_file(None, fd, size / 4) {
+                    match c.send_file(None, fd, Some(len as i64), size) {
                         Some(0) => break,
                         Some(n) => {
                             len += n;
                             if n < DEAFULT_SEND_SIZE {
                                 break;
                             }
-                            barrier.limit_speed(n);
+                            // barrier.limit_speed(n);
                         }
                         None => {
                             warn!("Can't send file {}", path);
@@ -799,6 +791,14 @@ impl Session {
     }
 }
 
+impl Drop for Session {
+    fn drop(&mut self) {
+        let fd = self.cmd_conn.get_fd();
+        self.cmd_conn.shutdown();
+        debug!("Session: {} shutdown", fd);
+    }
+}
+
 fn invaild_path(path: &Path) -> bool {
     for component in path.components() {
         if let Component::ParentDir = component {
@@ -909,6 +909,6 @@ pub fn remove_dir_all(path: &Path) -> bool {
             }
         }
     }
-    // unsafe { rmdir(path.as_os_str() as *const i8) != -1 }
+    unlink(path).expect(&format!("Couldn't unlink file {}", path.display()));
     true
 }
