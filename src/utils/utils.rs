@@ -42,7 +42,7 @@ pub fn daemonize() {
         signal(Signal::SIGHUP, SigHandler::SigIgn).unwrap();
     }
     pthread_sigmask(SigmaskHow::SIG_BLOCK, Some(&SigSet::all()), None).unwrap();
-    setsid().expect("can't set sid");
+    // setsid().expect("can't set sid");
     let root = User::from_uid(Uid::from_raw(0)).unwrap().unwrap();
     chdir(&root.dir).expect("Couldn't cd to root directory");
 }
