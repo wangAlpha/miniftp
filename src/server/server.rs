@@ -64,8 +64,8 @@ impl Handler for FtpServer {
                 self.sessions.insert(fd, Arc::new(Mutex::new(s)));
             } else {
                 warn!(
-                    "Session number: {}, shutdown conn: {}",
-                    self.sessions.len(),
+                    "Max client number: {}, Session number: {}, shutdown conn: {}",
+                    self.config.max_clients, self.sessions.len(),
                     fd
                 );
                 conn.shutdown();
