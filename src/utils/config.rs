@@ -3,6 +3,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::fs::File;
 use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::{collections::HashMap, io::Write};
 
@@ -25,7 +26,8 @@ pub struct Config {
     pub users: Users,
 }
 
-pub fn get_content(path: &str) -> Option<String> {
+pub fn get_content(path: &Path) -> Option<String> {
+    let path = path.to_str().unwrap();
     match File::open(path) {
         Ok(mut file) => {
             let mut content = String::new();
@@ -37,8 +39,8 @@ pub fn get_content(path: &str) -> Option<String> {
 }
 
 impl Config {
-    pub fn new(path: &str) -> Config {
-        if let Some(content) = get_content(path) {
+    pub fn new(path: &PathBuf) -> Config {
+        if let Some(content) = get_content(path.as_path()) {
             serde_yaml::from_str::<Config>(content.as_str()).unwrap()
         } else {
             debug!(

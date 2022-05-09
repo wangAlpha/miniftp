@@ -2,16 +2,17 @@ use chrono::Local;
 use env_logger::Builder;
 use log::LevelFilter;
 use nix::fcntl::{flock, open, FlockArg, OFlag};
-use nix::libc::exit;
+use nix::libc::{STDERR_FILENO, STDOUT_FILENO};
 use nix::sys::signal::{pthread_sigmask, signal};
 use nix::sys::signal::{SigHandler, SigSet, SigmaskHow, Signal};
 use nix::sys::stat::{lstat, umask, Mode, SFlag};
-use nix::unistd::{access, AccessFlags};
-use nix::unistd::{chdir, fork, ftruncate, getpid, getuid, setsid, write};
-use nix::unistd::{Uid, User};
+use nix::unistd::{access, chdir, dup2, fork};
+use nix::unistd::{ftruncate, getpid, getuid, write};
+use nix::unistd::{AccessFlags, Uid, User};
 use std::io::Write;
 
 const LOCK_FILE: &'static str = "/var/run/miniftp.pid";
+const LOG_FILE: &'static str = "/var/log/mini.log";
 
 pub fn is_regular(path: &str) -> bool {
     let stat = lstat(path).unwrap();
@@ -32,11 +33,18 @@ pub fn is_exist(path: &str) -> bool {
 }
 
 pub fn daemonize() {
-    umask(Mode::from_bits(0x666).unwrap());
-    // let result = unsafe { fork().expect("cant't fork a new process") };
-    // if result.is_parent() {
-    //     unsafe { exit(0) };
-    // }
+    umask(Mode::from_bits(0x00).unwrap());
+    let log_fd = open(
+        LOG_FILE,
+        OFlag::O_APPEND | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC,
+        Mode::S_IWUSR | Mode::S_IRUSR,
+    )
+    .unwrap();
+    let result = unsafe { fork().expect("cant't fork a new process") };
+
+    dup2(log_fd, STDERR_FILENO).unwrap();
+    dup2(log_fd, STDOUT_FILENO).unwrap();
+
     unsafe {
         signal(Signal::SIGPIPE, SigHandler::SigIgn).unwrap();
         signal(Signal::SIGHUP, SigHandler::SigIgn).unwrap();

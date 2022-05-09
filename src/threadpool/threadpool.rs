@@ -15,7 +15,7 @@ type Job = Box<dyn FnOnce() + Send + 'static>;
 
 impl ThreadPool {
     pub fn new(size: usize) -> ThreadPool {
-        let size = if size > 0 { size } else { num_cpus::get() };
+        let size = if size > 0 { size } else { num_cpus::get() + 1 };
 
         let (sender, receiver) = mpsc::channel();
         let receiver = Arc::new(Mutex::new(receiver));

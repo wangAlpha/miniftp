@@ -1,19 +1,16 @@
 use super::buffer::Buffer;
 use super::event_loop::EventLoop;
 use super::event_loop::*;
-use log::{debug, warn};
+use super::socket::Socket;
+use log::warn;
 use nix::fcntl::{fcntl, open, FcntlArg, OFlag};
 use nix::sys::epoll::EpollFlags;
 use nix::sys::sendfile::sendfile;
-use nix::sys::socket::shutdown;
-use nix::sys::socket::{accept4, connect, getpeername, getsockname, setsockopt, socket, sockopt};
-use nix::sys::socket::{AddressFamily, InetAddr, Shutdown};
-use nix::sys::socket::{SockAddr, SockFlag, SockProtocol, SockType};
+use nix::sys::socket::Shutdown;
+use nix::sys::socket::{getpeername, getsockname, shutdown};
 use nix::sys::stat::Mode;
 use nix::unistd::{close, write};
-use std::net::{SocketAddr, TcpListener};
 use std::os::unix::prelude::AsRawFd;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 pub type ConnRef = Arc<Mutex<Connection>>;
@@ -56,7 +53,7 @@ impl EventSet for EpollFlags {
 
 #[derive(Debug, Clone)]
 pub struct Connection {
-    fd: i32,
+    sock: Socket,
     state: State,
     input_buf: Buffer,
     output_buf: Buffer,
@@ -66,12 +63,12 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn new(fd: i32) -> Self {
-        assert!(fd > 0);
-        let local_addr = format!("{}", getsockname(fd).unwrap());
-        let peer_addr = format!("{}", getpeername(fd).unwrap());
+    pub fn new(sock: Socket) -> Self {
+        assert!(sock.as_raw_fd() > 0);
+        let local_addr = format!("{}", getsockname(sock.as_raw_fd()).unwrap());
+        let peer_addr = format!("{}", getpeername(sock.as_raw_fd()).unwrap());
         Connection {
-            fd,
+            sock,
             state: State::Ready,
             input_buf: Buffer::new(),
             output_buf: Buffer::new(),
@@ -79,38 +76,6 @@ impl Connection {
             peer_addr,
             revents: EpollFlags::empty(),
         }
-    }
-    pub fn bind(addr: &str) -> (i32, TcpListener) {
-        let listener = TcpListener::bind(addr).unwrap();
-        (listener.as_raw_fd(), listener)
-    }
-    pub fn connect(addr: &str) -> Connection {
-        let sockfd = socket(
-            AddressFamily::Inet,
-            SockType::Stream,
-            SockFlag::SOCK_CLOEXEC,
-            SockProtocol::Tcp,
-        )
-        .unwrap();
-
-        let addr = SocketAddr::from_str(addr).unwrap();
-        let inet_addr = InetAddr::from_std(&addr);
-        let sock_addr = SockAddr::new_inet(inet_addr);
-        // TODO: add a exception handle
-        match connect(sockfd, &sock_addr) {
-            Ok(()) => debug!("a new connection: {}", sockfd),
-            Err(e) => warn!("connect failed: {}", e),
-        }
-        return Connection::new(sockfd);
-    }
-    pub fn accept(listen_fd: i32) -> Self {
-        let fd = accept4(listen_fd, SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK).unwrap();
-        setsockopt(fd, sockopt::TcpNoDelay, &true).unwrap();
-        setsockopt(fd, sockopt::KeepAlive, &true).unwrap();
-        Connection::new(fd)
-    }
-    pub fn set_no_delay(&mut self, on: bool) {
-        setsockopt(self.fd, sockopt::KeepAlive, &on).unwrap();
     }
     pub fn set_revents(&mut self, revents: &EpollFlags) {
         self.revents = revents.clone();
@@ -130,7 +95,7 @@ impl Connection {
     pub fn dispatch(&mut self, revents: EpollFlags) -> State {
         self.state = State::Ready;
         if revents.is_readable() {
-            self.input_buf.read(self.fd);
+            self.input_buf.read(self.sock.as_raw_fd());
         }
         if revents.is_writeable() {
             // self.write();
@@ -143,28 +108,27 @@ impl Connection {
         }
         return self.state;
     }
-    pub fn get_fd(&self) -> i32 {
-        self.fd
+    pub fn get_fd(&self) -> Socket {
+        self.sock.clone()
     }
     pub fn get_state(&self) -> State {
         self.state
     }
     pub fn register_read(&mut self, event_loop: &mut EventLoop) {
-        // self.read_buf.clear();
         event_loop.reregister(
-            self.fd,
+            self.sock.as_raw_fd(),
             EVENT_HUP | EVENT_ERR | EVENT_WRIT | EVENT_READ | EVENT_LEVEL,
         );
     }
     pub fn deregister(&mut self, event_loop: &mut EventLoop) {
-        event_loop.deregister(self.fd);
+        event_loop.deregister(self.sock.as_raw_fd());
         self.shutdown();
     }
     pub fn shutdown(&mut self) {
         self.state = State::Closed;
-        match shutdown(self.fd, Shutdown::Both) {
+        match shutdown(self.sock.as_raw_fd(), Shutdown::Both) {
             Ok(()) => (),
-            Err(e) => warn!("Shutdown {} occur {} error", self.fd, e),
+            Err(e) => warn!("Shutdown {} occur {} error", self.sock.as_raw_fd(), e),
         }
     }
     // 限速发送，定时发送一部分
@@ -183,16 +147,16 @@ impl Connection {
         };
         if let Some(file) = file {
             let fd = open(file, OFlag::O_RDWR, Mode::S_IRUSR).unwrap();
-            let size = sendfile(self.fd, fd, off, size).unwrap();
+            let size = sendfile(self.sock.as_raw_fd(), fd, off, size).unwrap();
             close(fd).expect("Couldn't close file");
             return Some(size);
         } else {
-            let size = sendfile(self.fd, fd, off, size).unwrap();
+            let size = sendfile(self.sock.as_raw_fd(), fd, off, size).unwrap();
             return Some(size);
         }
     }
     pub fn send(&mut self, buf: &[u8]) {
-        match write(self.fd, buf) {
+        match write(self.sock.as_raw_fd(), buf) {
             Ok(_) => (),
             Err(e) => {
                 warn!("Send data error: {}", e)
@@ -200,11 +164,11 @@ impl Connection {
         };
     }
     pub fn read_buf(&mut self) -> Vec<u8> {
-        self.input_buf.read(self.fd);
+        self.input_buf.read(self.sock.as_raw_fd());
         self.input_buf.read_buf()
     }
     pub fn read_msg(&mut self) -> Option<Vec<u8>> {
-        match self.input_buf.read(self.fd) {
+        match self.input_buf.read(self.sock.as_raw_fd()) {
             Some(0) | None => None,
             Some(_) => self.input_buf.get_crlf_line(),
         }
@@ -212,12 +176,11 @@ impl Connection {
 }
 impl Drop for Connection {
     fn drop(&mut self) {
-        if 0 > fcntl(self.fd, FcntlArg::F_GETFL).unwrap() {
+        if 0 > fcntl(self.sock.as_raw_fd(), FcntlArg::F_GETFL).unwrap() {
             self.shutdown();
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,31 +1,34 @@
-use crate::handler::codec::{Decoder, Encoder, FtpCodec};
-use crate::handler::speed_barrier::SpeedBarrier;
-use crate::handler::speed_barrier::DEFAULT_MAX_SPEED;
 use crate::net::connection::Connection;
 use crate::net::event_loop::EventLoop;
 use crate::server::record_lock::FileLock;
 use crate::utils::config::Config;
 use crate::utils::utils::is_regular;
 use crate::{handler::cmd::*, utils::utils::is_exist};
+use crate::{
+    handler::codec::{Decoder, Encoder, FtpCodec},
+    net::socket::Socket,
+};
+use crate::{
+    handler::speed_barrier::{SpeedBarrier, DEFAULT_MAX_SPEED},
+    net::acceptor::Acceptor,
+};
 use crate::{is_blk, is_char, is_dir, is_link, is_pipe, is_reg, is_sock};
 use chrono::prelude::*;
 use log::{debug, info, warn};
 use nix::dir::{Dir, Type};
 use nix::fcntl::{open, renameat, OFlag};
 use nix::sys::epoll::EpollFlags;
+use nix::sys::stat::fchmodat;
 use nix::sys::stat::FchmodatFlags;
-use nix::sys::stat::{fchmodat, umask};
 use nix::sys::stat::{lstat, Mode, SFlag};
 use nix::sys::utsname::uname;
 use nix::unistd::{close, ftruncate, lseek, mkdir, unlink, write};
 use nix::unistd::{Gid, Group, Uid, User, Whence};
 use std::collections::HashMap;
 use std::fs::canonicalize;
-use std::net::TcpListener;
 use std::os::unix::prelude::AsRawFd;
 use std::path::{Component, Path, PathBuf};
 use std::string::String;
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 const KILOGYTE: f64 = 1024f64;
@@ -60,6 +63,7 @@ pub struct Session {
     data_port: Option<u16>,
     codec: FtpCodec,
     server_root: PathBuf,
+    mode: u32, // for umask mode
     name: Option<String>,
     is_admin: bool,
     transfer_type: TransferType,
@@ -84,6 +88,7 @@ impl Session {
             data_port: Some(22),
             codec: FtpCodec,
             server_root: canonicalize(root.dir.clone()).unwrap(),
+            mode: 0x0,
             is_admin: true,
             transfer_type: TransferType::BINARY,
             waiting_password: false,
@@ -257,8 +262,8 @@ impl Session {
             return c;
         } else {
             let addr = format!("127.0.0.1:{}", port);
-            let c = Connection::connect(&addr);
-            return Some(c);
+            let sock = Socket::connect(&addr);
+            return Some(Connection::new(sock));
         }
     }
     pub fn set_revents(&mut self, revents: &EpollFlags) {
@@ -379,11 +384,11 @@ impl Session {
         let mut ok = false;
         if contents.len() == 2 && contents[0] == "umask" {
             if let Ok(mode) = contents[1].parse::<u32>() {
-                let mode = umask(Mode::from_bits(mode).unwrap_or(Mode::all()));
+                self.mode = mode;
                 ok = true;
                 self.send_answer(Answer::new(
                     ResultCode::Ok,
-                    &format!("UMASK set to {}", mode.bits()),
+                    &format!("UMASK set to {}", mode),
                 ));
             }
         } else if contents.len() == 3 && contents[0] == "chmod" {
@@ -528,9 +533,10 @@ impl Session {
             port & 0xFF
         );
         let addr = format!("0.0.0.0:{}", port);
-        let listener = TcpListener::bind(addr).unwrap();
+        let listener = Socket::bind(&addr);
         self.send_answer(Answer::new(ResultCode::PassMode, &message));
-        self.data_conn = Some(Connection::accept(listener.as_raw_fd()));
+        let s = Acceptor::accept(listener.as_raw_fd());
+        self.data_conn = Some(Connection::new(s));
     }
     fn port(&mut self, port: u16) {
         self.pasv_enable = false;
@@ -749,40 +755,6 @@ impl Session {
             "No transfer to Abort!",
         ));
     }
-    pub fn receive_data(
-        &mut self,
-        msg: Vec<u8>,
-        conn: &Arc<Mutex<Connection>>,
-        conn_map: &mut Arc<Mutex<HashMap<i32, i32>>>,
-    ) {
-        debug!(
-            "receive_data: {}, conn: {}",
-            msg.len(),
-            conn.lock().unwrap().get_fd()
-        );
-        if let Some(context) = &self.curr_file_context {
-            let buf = msg.as_slice();
-            write(context.0, buf).unwrap();
-            let conn = conn.lock().unwrap();
-            let fd = conn.get_fd();
-            let connected = if conn.connected() { "UP" } else { "DOWN" };
-            debug!(
-                "{} -> {} is {}",
-                conn.get_peer_addr(),
-                conn.get_local_addr(),
-                connected,
-            );
-            if !conn.connected() {
-                close(context.0).unwrap();
-                self.curr_file_context = None;
-                self.send_answer(Answer::new(ResultCode::ConnClose, "Transfer done"));
-                conn_map.lock().unwrap().remove(&fd);
-                info!("Transfer done!");
-            }
-        } else {
-            warn!("cant't get current file context");
-        }
-    }
     fn send_answer(&mut self, answer: Answer) {
         let mut buf = Vec::new();
         self.codec.encode(answer.clone(), &mut buf).unwrap();
@@ -793,9 +765,8 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        let fd = self.cmd_conn.get_fd();
+        // let fd = self.cmd_conn.get_fd();
         self.cmd_conn.shutdown();
-        debug!("Session: {} shutdown", fd);
     }
 }
 

@@ -1,9 +1,9 @@
 use super::poller::Poller;
+use super::socket::Socket;
 use nix::sys::epoll::{EpollEvent, EpollFlags, EpollOp};
 use nix::sys::time::{TimeSpec, TimeValLike};
 use nix::sys::timerfd::{ClockId, Expiration, TimerFd, TimerFlags, TimerSetTimeFlags};
-use std::collections::HashMap;
-use std::net::TcpListener;
+use std::collections::{HashMap, HashSet};
 use std::os::unix::prelude::AsRawFd;
 use std::sync::{Arc, Mutex};
 
@@ -13,11 +13,6 @@ pub const EVENT_ERR: EpollFlags = EpollFlags::EPOLLERR;
 pub const EVENT_HUP: EpollFlags = EpollFlags::EPOLLHUP;
 pub const EVENT_WRIT: EpollFlags = EpollFlags::EPOLLOUT;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ConnType {
-    Data,
-    Cmd,
-}
 #[derive(Debug, Clone, Copy)]
 pub enum Token {
     Listen(i32),
@@ -34,32 +29,32 @@ pub trait Handler: Sized {
 
 #[derive(Debug, Clone)]
 pub struct EventLoop {
-    listener: Arc<TcpListener>,
-    listeners: Arc<Mutex<HashMap<i32, TcpListener>>>,
+    listener: Arc<Socket>,
+    listeners: Arc<Mutex<HashSet<i32>>>,
     timers: Arc<Mutex<HashMap<i32, TimerFd>>>,
     poller: Poller,
     run: bool,
 }
 
 impl EventLoop {
-    pub fn new(listener: TcpListener) -> Self {
+    pub fn new(listener: Socket) -> Self {
         let mut poller = Poller::new();
         let interest = EVENT_ERR | EVENT_WRIT | EVENT_READ | EVENT_LEVEL;
         poller.register(listener.as_raw_fd(), interest);
         EventLoop {
             listener: Arc::new(listener),
-            listeners: Arc::new(Mutex::new(HashMap::new())),
+            listeners: Arc::new(Mutex::new(HashSet::new())),
             timers: Arc::new(Mutex::new(HashMap::new())),
             run: true,
             poller,
         }
     }
-    pub fn register(&mut self, listener: TcpListener, interest: EpollFlags) {
+    pub fn register(&mut self, listener: Socket, interest: EpollFlags) {
         let fd = listener.as_raw_fd();
-        self.listeners.lock().unwrap().insert(fd, listener);
+        // self.listeners.lock().unwrap().insert(listener);
         self.poller.register(fd, interest);
     }
-    pub fn register_listen(&mut self, listener: TcpListener) {
+    pub fn register_listen(&mut self, listener: Socket) {
         self.register(listener, EVENT_HUP | EVENT_WRIT | EVENT_READ | EVENT_LEVEL);
     }
     pub fn reregister(&self, fd: i32, interest: EpollFlags) {
@@ -71,7 +66,8 @@ impl EventLoop {
         self.poller.update(EpollOp::EpollCtlDel, fd, &mut None);
     }
     fn is_listen_event(&self, fd: i32) -> bool {
-        self.listener.as_raw_fd() == fd || self.listeners.lock().unwrap().contains_key(&fd)
+        self.listener.as_raw_fd() == fd
+        //|| self.listeners.lock().unwrap().contains_key(&fd)
     }
     fn is_timer_event(&self, fd: i32) -> bool {
         self.timers.lock().unwrap().contains_key(&fd)

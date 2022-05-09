@@ -1,8 +1,9 @@
 use crate::handler::session::Session;
-use crate::net::connection::Connection;
-use crate::net::connection::EventSet;
+use crate::net::acceptor::Acceptor;
+use crate::net::connection::{Connection, EventSet};
 use crate::net::event_loop::{EventLoop, Handler, Token};
 use crate::net::queue::{BlockingQueue, BlockingQueueRef};
+use crate::net::socket::Socket;
 use crate::net::sorted_list::TimerList;
 use crate::threadpool::threadpool::ThreadPool;
 use crate::utils::config::{Config, DEFAULT_CONF_FILE};
@@ -11,8 +12,9 @@ use crate::utils::utils::daemonize;
 use log::{debug, info, warn};
 use nix::sys::epoll::EpollFlags;
 use nix::unistd::read;
-use std::os::unix::prelude::AsRawFd;
+use num_cpus;
 use std::sync::{Arc, Mutex};
+use std::{os::unix::prelude::AsRawFd, path::PathBuf};
 
 const DEFAULT_TIME_OUT: u64 = 90; // time (s)
 const DEFAULT_TIMER: i64 = 2;
@@ -29,7 +31,7 @@ pub struct FtpServer {
 impl FtpServer {
     pub fn new(config: Config, event_loop: &mut EventLoop) -> Self {
         let q: TaskQueueRef = BlockingQueueRef::new(BlockingQueue::new(64));
-        let pool = ThreadPool::new(0);
+        let pool = ThreadPool::new(num_cpus::get() * 2);
         event_loop.add_timer(5);
         for _ in 0..pool.len() {
             let q_clone = q.clone();
@@ -54,19 +56,22 @@ impl Handler for FtpServer {
     // Handling connection events
     fn ready(&mut self, event_loop: &mut EventLoop, token: Token) {
         if let Token::Listen(listen_fd) = token {
-            let mut conn = Connection::accept(listen_fd);
-            let fd = conn.get_fd();
-            debug!("A new connection: {:?}:{}", token, fd);
+            let sock = Acceptor::accept(listen_fd);
+            let mut conn = Connection::new(sock.clone());
+
+            debug!("A new connection: {:?}:{}", token, sock.as_raw_fd());
 
             if self.config.max_clients > self.sessions.len() {
                 conn.register_read(event_loop);
                 let s = Session::new(&self.config, conn, event_loop);
-                self.sessions.insert(fd, Arc::new(Mutex::new(s)));
+                self.sessions
+                    .insert(sock.as_raw_fd(), Arc::new(Mutex::new(s)));
             } else {
                 warn!(
                     "Max client number: {}, Session number: {}, shutdown conn: {}",
-                    self.config.max_clients, self.sessions.len(),
-                    fd
+                    self.config.max_clients,
+                    self.sessions.len(),
+                    sock.as_raw_fd()
                 );
                 conn.shutdown();
             }
@@ -102,23 +107,18 @@ impl Handler for FtpServer {
         }
     }
 }
-pub fn run_server() {
+pub fn run_server(config: &PathBuf) {
     if already_running() {
         warn!("Already running...");
         return;
     }
     daemonize();
 
-    let config = Config::new(DEFAULT_CONF_FILE);
+    let config = Config::new(&config);
     // debug!("config: {}", config);
     let addr = format!("{}:{}", config.server_addr, config.server_port);
-    let (_, listener) = Connection::bind(&addr);
-    info!(
-        "Start server listener, addr: {}, fd: {:?}",
-        addr,
-        listener.as_raw_fd()
-    );
-
+    info!("Start server listen, addr: {}", addr);
+    let listener = Socket::bind(&addr);
     let mut event_loop = EventLoop::new(listener);
     let mut ftpserver = FtpServer::new(config, &mut event_loop);
     event_loop.run(&mut ftpserver);

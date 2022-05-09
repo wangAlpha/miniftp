@@ -20,5 +20,8 @@ num = "0.4.0"
 enum-primitive-derive = "^0.1"
 num-traits = "^0.1"
 rand = "0.8.5"
+lazy_static = "1.4.0"
+clap = { version = "3.1.17", features = ["derive"] }
+
 
 [profile.dev]

@@ -1,12 +1,11 @@
 use crate::handler::cmd::{Answer, ResultCode};
 use crate::handler::codec::{BytesCodec, Decoder, Encoder};
 use crate::net::connection::Connection;
+use crate::net::socket::Socket;
 use log::{debug, info, warn};
-use nix::sys::socket::{accept4, setsockopt, sockopt, SockFlag};
 use nix::sys::stat::lstat;
 use std::fs;
 use std::io::{self, stdin, Write};
-use std::net::TcpListener;
 use std::os::unix::prelude::AsRawFd;
 use std::path::Path;
 use std::str::FromStr;
@@ -120,8 +119,7 @@ impl LocalClient {
         }
         let addr = format!("{}:{}", self.hostname, self.port);
         debug!("Connect ftp server: {}", addr);
-        self.cmd_conn = Some(Connection::connect(&addr));
-        // let welcome = self.receive_answer();
+        self.cmd_conn = Some(Connection::new(Socket::connect(&addr)));
         self.user();
     }
     fn user(&mut self) {
@@ -219,13 +217,14 @@ impl LocalClient {
         let cmd = format!("PORT 127,0,0,1,{},{}", port >> 8, 0xFF & port);
         self.send_cmd(&cmd);
         let addr = format!("{}:{}", "127.0.0.1", port);
-        let listener = TcpListener::bind(addr.as_str()).unwrap();
+        // let listener = TcpListener::bind(addr.as_str()).unwrap();
+        let listener = Socket::bind(&addr);
         debug!("listener: {:?}", listener);
-        let fd = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC).unwrap();
-        debug!("accept a new connection: {}", fd);
-        setsockopt(fd, sockopt::TcpNoDelay, &true).unwrap();
+        let mut sock = Socket::accept(listener.as_raw_fd());
+        debug!("accept a new connection: {}", sock.as_raw_fd());
+        sock.set_no_delay(true);
         debug!("data connection build success");
-        Some(Connection::new(fd))
+        Some(Connection::new(sock))
     }
 
     fn cd(&mut self, path: &String) {
