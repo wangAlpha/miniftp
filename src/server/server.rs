@@ -6,9 +6,8 @@ use crate::net::queue::{BlockingQueue, BlockingQueueRef};
 use crate::net::socket::Socket;
 use crate::net::sorted_list::TimerList;
 use crate::threadpool::threadpool::ThreadPool;
-use crate::utils::config::{Config, DEFAULT_CONF_FILE};
-use crate::utils::utils::already_running;
-use crate::utils::utils::daemonize;
+use crate::utils::config::Config;
+use crate::utils::utils::{already_running, daemonize};
 use log::{debug, info, warn};
 use nix::sys::epoll::EpollFlags;
 use nix::unistd::read;
@@ -115,7 +114,7 @@ pub fn run_server(config: &PathBuf) {
     daemonize();
 
     let config = Config::new(&config);
-    // debug!("config: {}", config);
+    debug!("config: {:?}", config);
     let addr = format!("{}:{}", config.server_addr, config.server_port);
     info!("Start server listen, addr: {}", addr);
     let listener = Socket::bind(&addr);

@@ -1,4 +1,4 @@
-use log::{debug, info, warn};
+use log::{debug, warn};
 use nix::sys::socket::{accept4, bind, connect, setsockopt, socket, sockopt};
 use nix::sys::socket::{AddressFamily, InetAddr};
 use nix::sys::socket::{SockAddr, SockFlag, SockProtocol, SockType};

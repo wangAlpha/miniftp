@@ -10,6 +10,7 @@ use nix::unistd::{access, chdir, dup2, fork};
 use nix::unistd::{ftruncate, getpid, getuid, write};
 use nix::unistd::{AccessFlags, Uid, User};
 use std::io::Write;
+use std::process::exit;
 
 const LOCK_FILE: &'static str = "/var/run/miniftp.pid";
 const LOG_FILE: &'static str = "/var/log/mini.log";
@@ -40,8 +41,10 @@ pub fn daemonize() {
         Mode::S_IWUSR | Mode::S_IRUSR,
     )
     .unwrap();
-    let result = unsafe { fork().expect("cant't fork a new process") };
-
+    let fork_result = unsafe { fork().expect("cant't fork a new process") };
+    if fork_result.is_parent() {
+        exit(0);
+    }
     dup2(log_fd, STDERR_FILENO).unwrap();
     dup2(log_fd, STDOUT_FILENO).unwrap();
 

@@ -1,7 +1,6 @@
 use clap::Parser;
 use log::LevelFilter;
 use miniftp::{self, is_root_user, local_client, set_log_level};
-use std::env;
 
 /// Search for a pattern in a file and display the lines that contain it.
 #[derive(Parser, Debug)]
