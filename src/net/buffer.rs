@@ -176,9 +176,9 @@ fn main() {}
 mod tests {
     use super::*;
     use crate::net::connection::Connection;
+    use crate::net::socket::*;
     use nix::fcntl::open;
     use nix::fcntl::OFlag;
-    use nix::sys::sendfile::sendfile;
     use nix::sys::socket::socketpair;
     use nix::sys::socket::{AddressFamily, InetAddr, Shutdown};
     use nix::sys::socket::{SockFlag, SockType};
@@ -256,12 +256,13 @@ mod tests {
             SockFlag::empty(),
         )
         .unwrap();
-        let mut recv = Connection::new(rec_fd);
-        let mut send = Connection::new(send_fd);
+        let (recv, send) = (Socket(rec_fd), Socket(send_fd));
+        let mut recv = Connection::new(recv);
+        let mut send = Connection::new(send);
         let mut _t = thread::spawn(move || {
             let stat = lstat("miniftp").unwrap();
             let size = send
-                .send_file(Some("miniftp"), 0, 0, stat.st_size as usize)
+                .send_file(Some("miniftp"), 0, Some(0), stat.st_size as usize)
                 .unwrap();
             println!("send file size: {}", size);
             send.shutdown();

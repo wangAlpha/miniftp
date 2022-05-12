@@ -184,7 +184,7 @@ impl Drop for Connection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nix::sys::socket::socketpair;
+    use nix::sys::socket::*;
     use std::cell::RefCell;
     use std::rc::Rc;
     #[test]
@@ -196,6 +196,7 @@ mod tests {
             SockFlag::SOCK_CLOEXEC,
         )
         .unwrap();
+        let (rev, send) = (Socket(rev), Socket(send));
         let rev = Rc::new(RefCell::new(Connection::new(rev)));
         let send = Rc::new(RefCell::new(Connection::new(send)));
         assert_eq!((*rev.borrow_mut()).connected(), true);

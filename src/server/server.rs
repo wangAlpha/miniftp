@@ -12,6 +12,7 @@ use log::{debug, info, warn};
 use nix::sys::epoll::EpollFlags;
 use nix::unistd::read;
 use num_cpus;
+use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::{os::unix::prelude::AsRawFd, path::PathBuf};
 
@@ -55,6 +56,7 @@ impl Handler for FtpServer {
     // Handling connection events
     fn ready(&mut self, event_loop: &mut EventLoop, token: Token) {
         if let Token::Listen(listen_fd) = token {
+            debug!("listen fd: {}", listen_fd);
             let sock = Acceptor::accept(listen_fd);
             let mut conn = Connection::new(sock.clone());
 
@@ -114,10 +116,14 @@ pub fn run_server(config: &PathBuf) {
     daemonize();
 
     let config = Config::new(&config);
-    debug!("config: {:?}", config);
+    debug!("config: {:#?}", config);
     let addr = format!("{}:{}", config.server_addr, config.server_port);
     info!("Start server listen, addr: {}", addr);
-    let listener = Socket::bind(&addr);
+
+    let listener = TcpListener::bind(&addr).unwrap();
+    let listener = Socket(listener.as_raw_fd());
+    debug!("listen socket: {:?}", listener);
+
     let mut event_loop = EventLoop::new(listener);
     let mut ftpserver = FtpServer::new(config, &mut event_loop);
     event_loop.run(&mut ftpserver);

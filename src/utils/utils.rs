@@ -6,14 +6,14 @@ use nix::libc::{STDERR_FILENO, STDOUT_FILENO};
 use nix::sys::signal::{pthread_sigmask, signal};
 use nix::sys::signal::{SigHandler, SigSet, SigmaskHow, Signal};
 use nix::sys::stat::{lstat, umask, Mode, SFlag};
-use nix::unistd::{access, chdir, dup2, fork};
+use nix::unistd::{setsid, access, chdir, dup2, fork};
 use nix::unistd::{ftruncate, getpid, getuid, write};
 use nix::unistd::{AccessFlags, Uid, User};
 use std::io::Write;
 use std::process::exit;
 
 const LOCK_FILE: &'static str = "/var/run/miniftp.pid";
-const LOG_FILE: &'static str = "/var/log/mini.log";
+const LOG_FILE: &'static str = "/var/log/miniftp.log";
 
 pub fn is_regular(path: &str) -> bool {
     let stat = lstat(path).unwrap();
@@ -37,7 +37,7 @@ pub fn daemonize() {
     umask(Mode::from_bits(0x00).unwrap());
     let log_fd = open(
         LOG_FILE,
-        OFlag::O_APPEND | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC,
+        OFlag::O_APPEND | OFlag::O_CLOEXEC | OFlag::O_CREAT | OFlag::O_RDWR,
         Mode::S_IWUSR | Mode::S_IRUSR,
     )
     .unwrap();
@@ -53,7 +53,7 @@ pub fn daemonize() {
         signal(Signal::SIGHUP, SigHandler::SigIgn).unwrap();
     }
     pthread_sigmask(SigmaskHow::SIG_BLOCK, Some(&SigSet::all()), None).unwrap();
-    // setsid().expect("can't set sid");
+    setsid().expect("can't set sid");
     let root = User::from_uid(Uid::from_raw(0)).unwrap().unwrap();
     chdir(&root.dir).expect("Couldn't cd to root directory");
 }

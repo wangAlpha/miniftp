@@ -19,7 +19,7 @@ impl Socket {
         let sockfd = socket(
             AddressFamily::Inet,
             SockType::Stream,
-            *NONBLOCKING_CLOEXEC,
+            SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
             SockProtocol::Tcp,
         )
         .unwrap();

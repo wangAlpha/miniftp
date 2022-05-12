@@ -39,7 +39,7 @@ pub struct EventLoop {
 impl EventLoop {
     pub fn new(listener: Socket) -> Self {
         let mut poller = Poller::new();
-        let interest = EVENT_ERR | EVENT_WRIT | EVENT_READ | EVENT_LEVEL;
+        let interest = EVENT_READ;
         poller.register(listener.as_raw_fd(), interest);
         EventLoop {
             listener: Arc::new(listener),

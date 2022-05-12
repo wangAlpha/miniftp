@@ -1,11 +1,8 @@
-# lightsftp
-A light sftp server/client
-
-# LightSFTP
+# miniftp
 
 ## 介绍
 
-一个 Rust 实现的 Linux Light SFTP Server
+一个 Rust 实现的 Linux Light FTP Server
 
 ## 支持的功能
 

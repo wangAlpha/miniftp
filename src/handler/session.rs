@@ -584,39 +584,43 @@ impl Session {
         if let Some(mut c) = self.get_data_conn() {
             let path = path.to_str().unwrap();
             let mode = self.transfer_type;
+            let mut ok = false;
             if is_exist(path) && is_regular(path) && self.is_admin {
                 let message = format!("Opening {} mode data connection for {}", mode, &path);
                 self.send_answer(Answer::new(ResultCode::FileStatusOk, &message));
                 let instant = Instant::now();
-                let fd = open(path, OFlag::O_RDWR, Mode::S_IRUSR).unwrap();
-                let size = lstat(path).unwrap().st_size as usize;
-                // let mut barrier = SpeedBarrier::new(DEFAULT_MAX_SPEED);
-                let mut len = 0usize;
-                loop {
-                    match c.send_file(None, fd, Some(len as i64), size) {
-                        Some(0) => break,
-                        Some(n) => {
-                            len += n;
-                            if n < DEAFULT_SEND_SIZE {
+                if let Ok(fd) = open(path, OFlag::O_RDWR, Mode::S_IRUSR) {
+                    ok = true;
+                    let size = lstat(path).unwrap().st_size as usize;
+                    let mut barrier = SpeedBarrier::new(DEFAULT_MAX_SPEED);
+                    let mut len = 0usize;
+                    loop {
+                        match c.send_file(None, fd, Some(len as i64), size) {
+                            Some(0) => break,
+                            Some(n) => {
+                                len += n;
+                                if n < DEAFULT_SEND_SIZE {
+                                    break;
+                                }
+                                barrier.limit_speed(n);
+                            }
+                            None => {
+                                warn!("Can't send file {}", path);
                                 break;
                             }
-                            // barrier.limit_speed(n);
-                        }
-                        None => {
-                            warn!("Can't send file {}", path);
-                            break;
                         }
                     }
+                    c.shutdown();
+                    let message = format!("Transfer {} complete", path);
+                    self.send_answer(Answer::new(ResultCode::CloseDataClose, &message));
+                    info!("Transfer {} complete", path);
+                    let elapsed = instant.elapsed().as_secs_f64();
+                    let size = format_size(len as f64 / elapsed);
+                    info!("{} bytes send in {:.2} secs ({}B/s)", len, elapsed, size);
+                    info!("-> file transfer done!");
                 }
-                c.shutdown();
-                let message = format!("Transfer {} complete", path);
-                self.send_answer(Answer::new(ResultCode::CloseDataClose, &message));
-                info!("Transfer {} complete", path);
-                let elapsed = instant.elapsed().as_secs_f64();
-                let size = format_size(len as f64 / elapsed);
-                info!("{} bytes send in {:.2} secs ({}B/s)", len, elapsed, size);
-                info!("-> file transfer done!");
-            } else {
+            }
+            if !ok {
                 self.send_answer(Answer::new(
                     ResultCode::FileNotFound,
                     &format!("Failed to open file {}, please check file", path),
