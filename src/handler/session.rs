@@ -121,7 +121,12 @@ impl Session {
         }
         let mut msg = msg.unwrap();
         let cmd = self.codec.decode(&mut msg).unwrap().unwrap();
-        debug!("Cmd: {:?}", cmd);
+        info!(
+            "A connection ({}->{}) command: {:?}",
+            self.cmd_conn.get_peer_addr(),
+            self.cmd_conn.get_local_addr(),
+            cmd
+        );
         if self.is_logged() {
             match cmd.clone() {
                 // Access control commands
@@ -238,7 +243,7 @@ impl Session {
                     self.waiting_password = true;
                     self.send_answer(Answer::new(
                         ResultCode::NeedPsw,
-                        &format!("Login Ok, password needed for {}", name.unwrap()),
+                        &format!("Login Ok, password needed for {}", name.clone().unwrap()),
                     ));
                 } else {
                     self.waiting_password = false;
@@ -246,7 +251,16 @@ impl Session {
                     self.send_answer(Answer::new(ResultCode::Login, &message));
                 }
             }
+            let user_dir = self.cur_dir.join(name.clone().unwrap_or(String::new()));
+            if user_dir.exists() {
+                self.cur_dir = user_dir;
+            }
         }
+        info!(
+            "user: {}, current directory: {:?}",
+            self.name.clone().unwrap_or(String::new()),
+            self.cur_dir
+        );
     }
     pub fn get_data_conn(&mut self) -> Option<Connection> {
         //     let mut rng = rand::thread_rng();

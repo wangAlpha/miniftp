@@ -62,8 +62,13 @@ impl Handler for FtpServer {
 
             debug!("A new connection: {:?}:{}", token, sock.as_raw_fd());
 
-            if self.config.max_clients > self.sessions.len() {
+            if self.config.max_clients > self.sessions.len() || self.config.max_clients == 0 {
                 conn.register_read(event_loop);
+                info!(
+                    "A new connection: {} -> {}",
+                    conn.get_peer_addr(),
+                    conn.get_local_addr()
+                );
                 let s = Session::new(&self.config, conn, event_loop);
                 self.sessions
                     .insert(sock.as_raw_fd(), Arc::new(Mutex::new(s)));
