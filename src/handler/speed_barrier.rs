@@ -1,7 +1,6 @@
+use super::session::KILOGYTE;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
-
-pub const DEFAULT_MAX_SPEED: i64 = 1024 * 1024 * 10; // 10MB/s
 pub struct SpeedBarrier {
     start_time: Instant,
     max_speed: i64, // bytes/s
@@ -16,13 +15,15 @@ impl SpeedBarrier {
     }
     pub fn limit_speed(&mut self, size: usize) {
         // ideal time (ms) = size / ideal speed
-        let normal_elapsed = (size as f64 * 1000f64 * 1000f64) / self.max_speed as f64;
-        let real_elapsed = self.start_time.elapsed().as_micros() as f64;
-
-        if real_elapsed < normal_elapsed {
-            // stop time = ideal time(ms) - real time(ms)
-            let diff_time = normal_elapsed - real_elapsed;
-            sleep(Duration::from_micros(diff_time as u64));
+        if self.max_speed <= 0 {
+            let normal_elapsed =
+                (size as f64 * 1000f64 * 1000f64) / (self.max_speed as f64 * KILOGYTE);
+            let real_elapsed = self.start_time.elapsed().as_micros() as f64;
+            if real_elapsed < normal_elapsed {
+                // stop time = ideal time(ms) - real time(ms)
+                let diff_time = normal_elapsed - real_elapsed;
+                sleep(Duration::from_micros(diff_time as u64));
+            }
         }
         self.start_time = Instant::now();
     }
@@ -35,7 +36,7 @@ mod tests {
     fn test_speed_limit() {
         let mut barrier = SpeedBarrier::new(1 * 1024 * 1024); // 1MB/s
         let mut total = 50 * 1024 * 1024;
-        let mut timer = Instant::now();
+        let timer = Instant::now();
         const SIZE: i64 = 5 * 1024 * 1024;
         while total > 0 {
             sleep(Duration::from_secs(1));

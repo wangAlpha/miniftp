@@ -2,11 +2,15 @@ use nix::fcntl::{flock, FlockArg};
 
 pub struct FileLock {
     fd: i32,
+    is_drop: bool,
 }
 
 impl FileLock {
     pub fn new(fd: i32) -> Self {
-        FileLock { fd }
+        FileLock { fd, is_drop: true }
+    }
+    pub fn set_drop(&mut self, on: bool) {
+        self.is_drop = on;
     }
     pub fn lock(&self, writeable: bool) -> &Self {
         let args = if writeable {
@@ -25,6 +29,8 @@ impl FileLock {
 
 impl Drop for FileLock {
     fn drop(&mut self) {
-        self.unlock();
+        if self.is_drop {
+            self.unlock();
+        }
     }
 }

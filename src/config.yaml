@@ -5,6 +5,7 @@ pasv_port:
   - 2222
   - 4444
 max_clients: 1024
+max_speed: 10240
 ssl_enable: false
 rsa_cert_file: ~
 rsa_private_key_file: ~

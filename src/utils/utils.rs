@@ -1,13 +1,12 @@
+use crate::server::record_lock::FileLock;
 use chrono::Local;
 use env_logger::Builder;
 use log::LevelFilter;
-use nix::fcntl::{flock, open, FlockArg, OFlag};
+use nix::fcntl::{open, OFlag};
 use nix::libc::{STDERR_FILENO, STDOUT_FILENO};
-use nix::sys::signal::{pthread_sigmask, signal};
-use nix::sys::signal::{SigHandler, SigSet, SigmaskHow, Signal};
+use nix::sys::signal::{pthread_sigmask, signal, SigHandler, SigSet, SigmaskHow, Signal};
 use nix::sys::stat::{lstat, umask, Mode, SFlag};
-use nix::unistd::{setsid, access, chdir, dup2, fork};
-use nix::unistd::{ftruncate, getpid, getuid, write};
+use nix::unistd::{access, chdir, dup2, fork, ftruncate, getpid, getuid, setsid, write};
 use nix::unistd::{AccessFlags, Uid, User};
 use std::io::Write;
 use std::process::exit;
@@ -61,10 +60,7 @@ pub fn daemonize() {
 pub fn already_running() -> bool {
     let lock_mode = Mode::S_IRUSR | Mode::S_IWUSR | Mode::S_IRGRP | Mode::S_IROTH;
     let fd = open(LOCK_FILE, OFlag::O_RDWR | OFlag::O_CREAT, lock_mode).unwrap();
-    match flock(fd, FlockArg::LockExclusiveNonblock) {
-        Ok(_) => (),
-        Err(_) => return false,
-    }
+    let _lock = FileLock::new(fd).set_drop(false);
     match ftruncate(fd, 0) {
         Ok(_) => (),
         Err(_) => return false,

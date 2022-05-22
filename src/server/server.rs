@@ -2,7 +2,6 @@ use crate::handler::session::Session;
 use crate::net::acceptor::Acceptor;
 use crate::net::connection::{Connection, EventSet};
 use crate::net::event_loop::{EventLoop, Handler, Token};
-use crate::net::queue::{BlockingQueue, BlockingQueueRef};
 use crate::net::socket::Socket;
 use crate::net::sorted_list::TimerList;
 use crate::threadpool::threadpool::ThreadPool;
@@ -18,10 +17,8 @@ use std::{os::unix::prelude::AsRawFd, path::PathBuf};
 
 const DEFAULT_TIME_OUT: u64 = 90; // time (s)
 const DEFAULT_TIMER: i64 = 2;
-type TaskQueueRef = BlockingQueueRef<Arc<Mutex<Session>>>;
 
 pub struct FtpServer {
-    request_queue: TaskQueueRef,
     worker_pool: ThreadPool,
     sessions: TimerList<i32, Arc<Mutex<Session>>>, // <cmd_fd, session_ref>
     event_loop: EventLoop,
@@ -30,18 +27,9 @@ pub struct FtpServer {
 
 impl FtpServer {
     pub fn new(config: Config, event_loop: &mut EventLoop) -> Self {
-        let q: TaskQueueRef = BlockingQueueRef::new(BlockingQueue::new(64));
         let pool = ThreadPool::new(num_cpus::get() * 2);
         event_loop.add_timer(5);
-        for _ in 0..pool.len() {
-            let q_clone = q.clone();
-            pool.execute(move || loop {
-                let session = q_clone.pop_front();
-                session.lock().unwrap().handle_command();
-            });
-        }
         FtpServer {
-            request_queue: q,
             worker_pool: pool,
             sessions: TimerList::new(DEFAULT_TIME_OUT),
             event_loop: event_loop.clone(),
@@ -94,7 +82,11 @@ impl Handler for FtpServer {
                     event_loop.deregister(fd);
                     debug!("Remove session: {}", fd);
                 } else {
-                    self.request_queue.push_back(s.clone());
+                    // self.request_queue.push_back(s.clone());
+                    let s = s.clone();
+                    self.worker_pool.execute(move || loop {
+                        s.lock().unwrap().handle_command();
+                    });
                 }
             } else {
                 event_loop.deregister(fd);

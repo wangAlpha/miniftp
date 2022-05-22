@@ -1,26 +1,20 @@
+use crate::handler::codec::{Decoder, Encoder, FtpCodec};
+use crate::handler::speed_barrier::SpeedBarrier;
+use crate::net::acceptor::Acceptor;
 use crate::net::connection::Connection;
 use crate::net::event_loop::EventLoop;
+use crate::net::socket::Socket;
 use crate::server::record_lock::FileLock;
 use crate::utils::config::Config;
 use crate::utils::utils::is_regular;
 use crate::{handler::cmd::*, utils::utils::is_exist};
-use crate::{
-    handler::codec::{Decoder, Encoder, FtpCodec},
-    net::socket::Socket,
-};
-use crate::{
-    handler::speed_barrier::{SpeedBarrier, DEFAULT_MAX_SPEED},
-    net::acceptor::Acceptor,
-};
 use crate::{is_blk, is_char, is_dir, is_link, is_pipe, is_reg, is_sock};
 use chrono::prelude::*;
 use log::{debug, info, warn};
 use nix::dir::{Dir, Type};
 use nix::fcntl::{open, renameat, OFlag};
 use nix::sys::epoll::EpollFlags;
-use nix::sys::stat::fchmodat;
-use nix::sys::stat::FchmodatFlags;
-use nix::sys::stat::{lstat, Mode, SFlag};
+use nix::sys::stat::{fchmodat, lstat, FchmodatFlags, Mode, SFlag};
 use nix::sys::utsname::uname;
 use nix::unistd::{close, ftruncate, lseek, mkdir, unlink, write};
 use nix::unistd::{Gid, Group, Uid, User, Whence};
@@ -31,9 +25,9 @@ use std::path::{Component, Path, PathBuf};
 use std::string::String;
 use std::time::Instant;
 
-const KILOGYTE: f64 = 1024f64;
-const MEGA_BYTE: f64 = KILOGYTE * 1024f64;
-const GIGA_BYTE: f64 = MEGA_BYTE * 1024f64;
+pub const KILOGYTE: f64 = 1024f64;
+pub const MEGA_BYTE: f64 = KILOGYTE * 1024f64;
+pub const GIGA_BYTE: f64 = MEGA_BYTE * 1024f64;
 
 const DEFAULT_DIR_PERM: u32 = 0x777;
 const DEAFULT_FILE_PERM: u32 = 0x666;
@@ -67,7 +61,6 @@ pub struct Session {
     name: Option<String>,
     is_admin: bool,
     transfer_type: TransferType,
-    curr_file_context: Option<Context>,
     waiting_password: bool,
     event_loop: EventLoop,
     config: Config,
@@ -93,7 +86,6 @@ impl Session {
             transfer_type: TransferType::BINARY,
             waiting_password: false,
             event_loop: event_loop.clone(),
-            curr_file_context: None,
             name: None,
             config: config.clone(),
             pasv_enable: config.pasv_enable,
@@ -606,7 +598,7 @@ impl Session {
                 if let Ok(fd) = open(path, OFlag::O_RDWR, Mode::S_IRUSR) {
                     ok = true;
                     let size = lstat(path).unwrap().st_size as usize;
-                    let mut barrier = SpeedBarrier::new(DEFAULT_MAX_SPEED);
+                    let mut barrier = SpeedBarrier::new(self.config.max_speed);
                     let mut len = 0usize;
                     loop {
                         match c.send_file(None, fd, Some(len as i64), size) {
@@ -681,7 +673,7 @@ impl Session {
                 }
                 let instant = Instant::now();
                 let mut len = 0usize;
-                let mut barrier = SpeedBarrier::new(DEFAULT_MAX_SPEED);
+                let mut barrier = SpeedBarrier::new(self.config.max_speed);
                 loop {
                     let buf = c.read_buf();
                     if buf.is_empty() {

@@ -29,4 +29,7 @@ impl<T> BlockingQueue<T> {
         self.queue.lock().unwrap().push_back(item);
         self.condvar.notify_one();
     }
+    pub fn len(&self) -> usize {
+        self.queue.lock().unwrap().len()
+    }
 }
