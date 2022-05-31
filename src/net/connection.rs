@@ -117,7 +117,7 @@ impl Connection {
     pub fn register_read(&mut self, event_loop: &mut EventLoop) {
         event_loop.reregister(
             self.sock.as_raw_fd(),
-            EVENT_HUP | EVENT_ERR | EVENT_WRIT | EVENT_READ | EVENT_LEVEL,
+            EVENT_HUP | EVENT_ERR | EVENT_WRIT| EVENT_READ | EVENT_LEVEL,
         );
     }
     pub fn deregister(&mut self, event_loop: &mut EventLoop) {

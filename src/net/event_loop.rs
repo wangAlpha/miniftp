@@ -39,7 +39,7 @@ pub struct EventLoop {
 impl EventLoop {
     pub fn new(listener: Socket) -> Self {
         let mut poller = Poller::new();
-        let interest = EVENT_READ;
+        let interest = EVENT_READ|EVENT_LEVEL;
         poller.register(listener.as_raw_fd(), interest);
         EventLoop {
             listener: Arc::new(listener),
@@ -55,7 +55,7 @@ impl EventLoop {
         self.poller.register(fd, interest);
     }
     pub fn register_listen(&mut self, listener: Socket) {
-        self.register(listener, EVENT_HUP | EVENT_WRIT | EVENT_READ | EVENT_LEVEL);
+        self.register(listener, EVENT_HUP | EVENT_WRIT|  EVENT_READ | EVENT_LEVEL);
     }
     pub fn reregister(&self, fd: i32, interest: EpollFlags) {
         let event = EpollEvent::new(interest, fd as u64);

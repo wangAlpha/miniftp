@@ -243,10 +243,12 @@ impl Session {
                     self.send_answer(Answer::new(ResultCode::Login, &message));
                 }
             }
-            let user_dir = self.cur_dir.join(name.clone().unwrap_or(String::new()));
-            if user_dir.exists() {
-                self.cur_dir = user_dir;
-            }
+            let user_dir = Path::new("/home").join(name.clone().unwrap_or(String::new()));
+            self.cur_dir =  if user_dir.exists() {
+                user_dir
+            } else {
+                self.cur_dir.join(name.clone().unwrap_or(String::new()))
+            };
         }
         info!(
             "user: {}, current directory: {:?}",
@@ -255,8 +257,6 @@ impl Session {
         );
     }
     pub fn get_data_conn(&mut self) -> Option<Connection> {
-        //     let mut rng = rand::thread_rng();
-
         let port = if let Some(port) = self.data_port {
             port
         } else {
@@ -287,7 +287,7 @@ impl Session {
     fn mkd(&mut self, path: PathBuf) {
         let mut ok = false;
         let path = path.to_str().unwrap();
-        if !is_exist(path) {
+        if self.is_admin && !is_exist(path) {
             match mkdir(path, Mode::all()) {
                 Ok(_) => {
                     debug!("created {:?}", path);
@@ -308,7 +308,7 @@ impl Session {
     }
     fn rmd(&mut self, path: PathBuf) {
         // check path
-        if is_exist(path.to_str().unwrap_or("")) && path.is_dir() && remove_dir_all(&path) {
+        if self.is_admin && is_exist(path.to_str().unwrap_or("")) && path.is_dir() && remove_dir_all(&path) {
             self.send_answer(Answer::new(
                 ResultCode::FileActOk,
                 "Folder successufully removed",
@@ -348,7 +348,7 @@ impl Session {
     }
     fn rnfr(&mut self, path: PathBuf) {
         let file_name = path.to_str().unwrap();
-        if is_exist(file_name) && is_regular(file_name) {
+        if self.is_admin && is_exist(file_name) && is_regular(file_name) {
             self.file_name = Some(file_name.to_string());
             self.send_answer(Answer::new(
                 ResultCode::FileActionPending,
@@ -417,6 +417,7 @@ impl Session {
             self.send_answer(Answer::new(ResultCode::BadCmdSeq, &message));
         }
     }
+
     fn rest(&mut self, content: String) {
         if let Ok(n) = content.parse::<i64>() {
             self.resume_point = n;

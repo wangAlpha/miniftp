@@ -10,7 +10,6 @@ use crate::utils::utils::{already_running, daemonize};
 use log::{debug, info, warn};
 use nix::sys::epoll::EpollFlags;
 use nix::unistd::read;
-use num_cpus;
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::{os::unix::prelude::AsRawFd, path::PathBuf};
@@ -27,7 +26,7 @@ pub struct FtpServer {
 
 impl FtpServer {
     pub fn new(config: Config, event_loop: &mut EventLoop) -> Self {
-        let pool = ThreadPool::new(num_cpus::get() * 2);
+        let pool = ThreadPool::new(0);
         event_loop.add_timer(5);
         FtpServer {
             worker_pool: pool,
@@ -74,6 +73,7 @@ impl Handler for FtpServer {
     // Handling IO and timer events
     fn notify(&mut self, event_loop: &mut EventLoop, token: Token, revents: EpollFlags) {
         if let Token::Notify(fd) = token {
+            info!("fd: {} token: {:?}",fd, token.clone());
             if let Some(s) = self.sessions.get(&fd) {
                 s.lock().unwrap().set_revents(&revents);
                 debug!("Connection: {}, revents: {:?}", fd, revents);
@@ -84,7 +84,7 @@ impl Handler for FtpServer {
                 } else {
                     // self.request_queue.push_back(s.clone());
                     let s = s.clone();
-                    self.worker_pool.execute(move || loop {
+                    self.worker_pool.execute(move || {
                         s.lock().unwrap().handle_command();
                     });
                 }
