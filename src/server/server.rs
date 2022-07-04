@@ -102,15 +102,17 @@ impl Handler for FtpServer {
             let mut _buf = [0u8; 8];
             // Read this timer_fd otherwise repeated events are triggered.
             read(fd, &mut _buf).unwrap_or_default();
+            // adjust thread pool
+            self.worker_pool.adjust_workers();
         }
     }
 }
 pub fn run_server(config: &PathBuf) {
-    if already_running() {
-        warn!("Already running...");
-        return;
-    }
-    daemonize();
+    // if already_running() {
+    //     warn!("Already running...");
+    //     return;
+    // }
+    // daemonize();
 
     let config = Config::new(&config);
     debug!("config: {:#?}", config);

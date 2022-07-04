@@ -24,10 +24,12 @@ impl<T> BlockingQueue<T> {
             }
         }
     }
-
     pub fn push_back(&self, item: T) {
         self.queue.lock().unwrap().push_back(item);
         self.condvar.notify_one();
+    }
+    pub fn notify_all(&self) {
+        self.condvar.notify_all();
     }
     pub fn len(&self) -> usize {
         self.queue.lock().unwrap().len()

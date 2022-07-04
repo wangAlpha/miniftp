@@ -22,10 +22,10 @@ fn main() {
         println!("starting minFTP shell");
         client.shell_loop();
     } else if args.pattern.eq("server") {
-        if !is_root_user() {
-            println!("minftp: must be started as root user.");
-            return;
-        }
+        // if !is_root_user() {
+        //     println!("minftp: must be started as root user.");
+        //     return;
+        // }
         let config = args.config.canonicalize().unwrap();
         println!("config: {:?}", config);
         miniftp::run_server(&config);

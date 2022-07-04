@@ -36,7 +36,7 @@ pub fn daemonize() {
     umask(Mode::from_bits(0x00).unwrap());
     let log_fd = open(
         LOG_FILE,
-        OFlag::O_APPEND | OFlag::O_CLOEXEC | OFlag::O_CREAT | OFlag::O_RDWR,
+         OFlag::O_APPEND | OFlag::O_CLOEXEC | OFlag::O_CREAT | OFlag::O_RDWR,
         Mode::S_IWUSR | Mode::S_IRUSR,
     )
     .unwrap();
