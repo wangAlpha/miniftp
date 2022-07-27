@@ -1,6 +1,6 @@
 # miniftp
 ## Demo
-[![Watch the video](Watch the video)](https://user-images.githubusercontent.com/37993728/181192629-e53c2053-1c60-4415-8727-382ae99c94af.mp4)
+[![Watch the video](Watch the video)](https://user-images.githubusercontent.com/14357954/181197965-caa1e033-e8a1-424f-9944-73152ef26c07.mp4)
 
 ## 介绍
 
