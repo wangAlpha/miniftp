@@ -2,6 +2,8 @@
 ## Demo
 [![Watch the video](Watch the video)](https://user-images.githubusercontent.com/14357954/181197965-caa1e033-e8a1-424f-9944-73152ef26c07.mp4)
 
+<iframe src="//player.bilibili.com/player.html?aid=856407251&bvid=BV1YV4y1E7e5&cid=786627486&page=1" scrolling="no" border="0" frameborder="no" framespacing="0" allowfullscreen="true"> </iframe>
+
 ## 介绍
 
 一个 Rust 实现的 Linux Light FTP Server
