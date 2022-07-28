@@ -57,11 +57,11 @@ miniftp
 |     |-- codec         编码/解码器，解决粘包问题
 |     |-- session       FTP 功能实现
 |     |-- error         错误类型转换
-|     \-- speed_barrier 速度控制类
+|     \-- speed_barrier 传输速度控制类
 |  |-- net              Reactor 模式实现
 |     |-- acceptor      接收器，用于服务端接受连接
 |     |-- buffer        缓存区，非阻塞 IO 必备
-|     |-- socket        socket 文件符 wrapper 反正资源泄露
+|     |-- socket        socket 文件符 wrapper 防止资源泄露
 |     |-- connection    TCP 连接管理器
 |     |-- poller        IO multiplexing 的接口及实现
 |     \-- sorted_list   排序链表，实现空闲踢出功能
