@@ -80,4 +80,5 @@ miniftp
 |-- run.sh
 |-- config.yaml
 |-- Dockerfile
+|-- test
 ```
