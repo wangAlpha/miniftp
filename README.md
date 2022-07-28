@@ -75,10 +75,11 @@ miniftp
 |      |-- config       服务文件配置
 |      |-- macro_util   各类宏定义
 |      \-- utils        守护进程及 logging 配置
+|-- test
 |-- main.rs
 |-- README
 |-- run.sh
 |-- config.yaml
-|-- Dockerfile
-|-- test
+\-- Dockerfile
+
 ```
