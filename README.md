@@ -19,7 +19,7 @@
 
 ## 快速运行此代码
 ## 可执行程序
-下载 release 中的可执行程序包，解压，   运行
+下载 release 中的可执行程序包，解压，运行
 
 ### 源码编译
 
@@ -46,4 +46,38 @@
  > ftp
  > open 127.0.0.1 8089
  ```
- 
+
+#### 项目结构
+
+```
+miniftp
+|-- src
+|  |-- handler          FTP 业务逻辑主体
+|     |-- cmd           命令解析匹配及返回码宏定义
+|     |-- codec         编码/解码器，解决粘包问题
+|     |-- session       FTP 功能实现
+|     |-- error         错误类型转换
+|     \-- speed_barrier 速度控制类
+|  |-- net              Reactor 模式实现
+|     |-- acceptor      接收器，用于服务端接受连接
+|     |-- buffer        缓存区，非阻塞 IO 必备
+|     |-- socket        socket 文件符 wrapper 反正资源泄露
+|     |-- connection    TCP 连接管理器
+|     |-- poller        IO multiplexing 的接口及实现
+|     \-- sorted_list   排序链表，实现空闲踢出功能
+|  |-- server           IO EventLoop 及任务管理
+|     |-- record_lock   文件锁管理
+|     \-- server        FTP 服务端
+|  |-- threadpool       线程池
+|      |-- queue        阻塞队列，线程通信使用
+|      \-- threadpool   线程池实现
+|  \-- utils            helper 函数存放地
+|      |-- config       服务文件配置
+|      |-- macro_util   各类宏定义
+|      \-- utils        守护进程及 logging 配置
+|-- main.rs
+|-- README
+|-- run.sh
+|-- config.yaml
+|-- Dockerfile
+```
