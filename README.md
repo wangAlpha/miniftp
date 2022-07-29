@@ -1,4 +1,7 @@
 # miniftp
+
+![](https://github.com/wangAlpha/miniftp/workflows/Rust/badge.svg)
+
 ## Demo
 [![Watch the video](Watch the video)](https://user-images.githubusercontent.com/14357954/181453521-e470cf50-4a37-4b3d-afe8-cc08f7353eca.mp4)
 
