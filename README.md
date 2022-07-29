@@ -67,10 +67,11 @@ miniftp
 |  |  |-- connection    TCP 连接管理器
 |  |  |-- buffer        缓存区，非阻塞 IO 必备，可动态扩容
 |  |  |-- poller        IO multiplexing 的接口及实现
+|  |  |-- event_loop    IO EventLoop，进行 IO event 分发
 |  |  \-- sorted_list   排序链表，实现空闲踢出功能
-|  |-- server           IO EventLoop 及任务管理
+|  |-- server           TCP server
 |  |  |-- record_lock   文件锁管理
-|  |  \-- server        FTP 服务端，IO event 管理
+|  |  \-- server        FTP 服务端，任务管理
 |  |-- threadpool       线程池
 |  |   |-- queue        阻塞队列，线程通信使用
 |  |   \-- threadpool   线程池实现，还需实现动态伸缩
