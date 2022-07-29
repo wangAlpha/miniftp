@@ -60,21 +60,21 @@ miniftp
 |  |  \-- speed_barrier 速度控制类
 |  |-- net              Reactor 模式实现
 |  |  |-- acceptor      接收器，用于服务端接受连接
-|  |  |-- buffer        缓存区，非阻塞 IO 必备
-|  |  |-- socket        socket 文件符 wrapper 反正资源泄露
+|  |  |-- socket        socket 文件符 wrapper 防止资源泄露
 |  |  |-- connection    TCP 连接管理器
+|  |  |-- buffer        缓存区，非阻塞 IO 必备，可动态扩容
 |  |  |-- poller        IO multiplexing 的接口及实现
 |  |  \-- sorted_list   排序链表，实现空闲踢出功能
 |  |-- server           IO EventLoop 及任务管理
 |  |  |-- record_lock   文件锁管理
-|  |  \-- server        FTP 服务端
+|  |  \-- server        FTP 服务端，IO event 管理
 |  |-- threadpool       线程池
 |  |   |-- queue        阻塞队列，线程通信使用
-|  |   \-- threadpool   线程池实现
+|  |   \-- threadpool   线程池实现，还需实现动态伸缩
 |  \-- utils            helper 函数存放地
 |      |-- config       服务文件配置
 |      |-- macro_util   各类宏定义
-|      \-- utils        守护进程及 logging 配置
+|      \-- utils        守护进程设置及 logging 配置
 |-- test
 |-- main.rs
 |-- README
