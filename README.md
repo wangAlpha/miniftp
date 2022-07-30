@@ -86,3 +86,20 @@ miniftp
 |-- config.yaml
 \-- Dockerfile
 ```
+
+### 服务处理时序
+  miniftp 是由 `epoll` 实现的 `Reactor` 的事件驱动框架下实现的 FTP 业务逻辑。
+  本部分介绍了基本的连接的建立和处理客户端请求的基本流程。
+  minifp 新建连接的基本调用流程见图1。
+  1. `Poller` 实现 `IO multiplexing` 功能，而 `EventLoop` 负责管理 `Poller`, miniftp 的主线程为一直循环的 `IO-Event Loop`；
+  2. 一旦有一个新的连接事件，`EventLoop` 便会调用 `Acceptor` 对象创建 `Socket` 对象，`Socket` 创建 `TcpConnection`；
+  3. 该TCP连接向 `EventLoop` 注册，并注册 `Session` 和 `EventLoop`。
+  ![图1](images/create_conn.png)
+
+  miniftp 处理命令的基本调用流程见图2。
+  1. 一个连接注册成功后，client 向 server 发送命令，`EventLoop` 产生 `read event`;
+  2. 在 `FtpServer` 找到对应的 `Session` 丢入 `ThreadPool` 中的线程；
+  3. `Session` 在线程中调用 `TcpConnection` 处理 `read event`，之后从 `Buffer` 类读取数据，进行 `decode`；
+  4. 将读取的命令解析为 `Command` 进行匹配 `Session` 对应的函数处理 FTP 命令；
+  5. 处理完命令之后，假若需要进行数据传输，FTP 创建一个 `TcpConnection`，该 `TcpConnection` 在发送完数据后断开;
+  ![图2](images/cmd_request.png)
