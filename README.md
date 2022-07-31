@@ -1,4 +1,4 @@
-# miniftp
+![](images/miniftp.png)
 
 ![](https://github.com/wangAlpha/miniftp/workflows/Rust/badge.svg)
 
@@ -7,7 +7,7 @@
 
 ## 介绍
 
-一个 Rust 实现的 Linux Light FTP Server
+一个 Rust 实现的异步 FTP Server
 
 ## 支持的功能
 
