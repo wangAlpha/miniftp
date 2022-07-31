@@ -50,7 +50,7 @@
  > open 127.0.0.1 8089
  ```
 
-### 项目结构
+## 项目结构
 
 ```
 miniftp
@@ -87,8 +87,8 @@ miniftp
 \-- Dockerfile
 ```
 
-### 服务处理时序
-  miniftp 是由 `epoll` 实现的 `Reactor` 的事件驱动框架下实现的 FTP 业务逻辑。
+## 服务处理时序
+  miniftp 是由 `epoll` 实现的 `Reactor` 的事件驱动框架下运行的 FTP Server。
   本部分介绍了基本的连接的建立和处理客户端请求的基本流程。
   minifp 新建连接的基本调用流程见图1。
   1. `Poller` 实现 `IO multiplexing` 功能，而 `EventLoop` 负责管理 `Poller`, miniftp 的主线程为一直循环的 `IO-Event Loop`；
@@ -101,5 +101,11 @@ miniftp
   2. 在 `FtpServer` 找到对应的 `Session` 丢入 `ThreadPool` 中的线程；
   3. `Session` 在线程中调用 `TcpConnection` 处理 `read event`，之后从 `Buffer` 类读取数据，进行 `decode`；
   4. 将读取的命令解析为 `Command` 进行匹配 `Session` 对应的函数处理 FTP 命令；
-  5. 处理完命令之后，假若需要进行数据传输，FTP 创建一个 `TcpConnection`，该 `TcpConnection` 在发送完数据后断开;
+  5. 处理完命令之后，假若需要进行数据传输，FTP 创建一个 `TcpConnection`，该 `TcpConnection` 在向 Client 发送完数据后断开;
   ![图2](images/cmd_request.png)
+
+## Reference
+  1. [Advanced Programming in the UNIX Environmen](https://www.youtube.com/watch?v=3H7SQWTR6Dw)
+  2. [The Linux Programming Interface](https://man7.org/tlpi/)
+  3. [Linux多线程服务端编程](https://book.douban.com/subject/20471211/)
+  4. [The Rust Programming Language](https://doc.rust-lang.org/book/)
