@@ -3,22 +3,21 @@
 ![](https://github.com/wangAlpha/miniftp/workflows/Rust/badge.svg)
 
 ## Demo
-[![Watch the video](Watch the video)](https://user-images.githubusercontent.com/14357954/181453521-e470cf50-4a37-4b3d-afe8-cc08f7353eca.mp4)
-
+[![Watch the video](Watch the video)](https://user-images.githubusercontent.com/14357954/182007837-d91501a3-fd42-4b95-99b3-6742d6d337ee.mp4)
 ## 介绍
 
 一个 Rust 实现的异步 FTP Server
 
 ## 支持的功能
 
-- 大部分的 FTP 命令
-- 支持主被动传输模式
-- 支持用户自定义配置信息
+- 大部分的 FTP 命令，能够使用常见的 FTP 客户端进行连接
+- 支持主/被动传输模式
 - 支持指定被动模式下数据端口的范围，考虑到了主机配置有防火墙的情况
+- 支持用户自定义配置信息
 - 支持文件上传/下载的断点续传
-- 支持限速功能，防止服务过多占用带宽资源
-- 限流，防 DDOS 攻击
 - 空闲连接自动剔除
+- 连接数限制，防 DDOS 攻击
+- 支持限速功能，防止单个服务过多占用带宽资源
 
 ## 快速运行此代码
 ## 可执行程序
@@ -65,7 +64,7 @@ miniftp
 |  |  |-- acceptor      接收器，用于服务端接受连接
 |  |  |-- socket        socket 文件符 wrapper 防止资源泄露
 |  |  |-- connection    TCP 连接管理器
-|  |  |-- buffer        缓存区，非阻塞 IO 必备，可动态扩容
+|  |  |-- buffer        缓存区，非阻塞 IO 必备，写时读，可动态扩容
 |  |  |-- poller        IO multiplexing 的接口及实现
 |  |  |-- event_loop    IO EventLoop，进行 IO event 分发
 |  |  \-- sorted_list   排序链表，实现空闲踢出功能
@@ -93,19 +92,20 @@ miniftp
   minifp 新建连接的基本调用流程见图1。
   1. `Poller` 实现 `IO multiplexing` 功能，而 `EventLoop` 负责管理 `Poller`, miniftp 的主线程为一直循环的 `IO-Event Loop`；
   2. 一旦有一个新的连接事件，`EventLoop` 便会调用 `Acceptor` 对象创建 `Socket` 对象，`Socket` 创建 `TcpConnection`；
-  3. 该TCP连接向 `EventLoop` 注册，并注册 `Session` 和 `EventLoop`。
+  3. 该 TCP 连接向 `EventLoop` 注册，并注册 `Session` 和 `EventLoop`。
   ![图1](images/create_conn.png)
 
   miniftp 处理命令的基本调用流程见图2。
   1. 一个连接注册成功后，client 向 server 发送命令，`EventLoop` 产生 `read event`;
   2. 在 `FtpServer` 找到对应的 `Session` 丢入 `ThreadPool` 中的线程；
-  3. `Session` 在线程中调用 `TcpConnection` 处理 `read event`，之后从 `Buffer` 类读取数据，进行 `decode`；
-  4. 将读取的命令解析为 `Command` 进行匹配 `Session` 对应的函数处理 FTP 命令；
+  3. 在线程中 `Session` 调用 `TcpConnection` 处理 `read event`，从 `Buffer` 类读取数据，并进行 `decode`；
+  4. 将读取的命令解析为 `Command` 进行匹配 `Session` 对应的方法处理 FTP 命令；
   5. 处理完命令之后，假若需要进行数据传输，FTP 创建一个 `TcpConnection`，该 `TcpConnection` 在向 Client 发送完数据后断开;
   ![图2](images/cmd_request.png)
 
 ## Reference
   1. [Advanced Programming in the UNIX Environmen](https://www.youtube.com/watch?v=3H7SQWTR6Dw)
   2. [The Linux Programming Interface](https://man7.org/tlpi/)
-  3. [Linux多线程服务端编程](https://book.douban.com/subject/20471211/)
-  4. [The Rust Programming Language](https://doc.rust-lang.org/book/)
+  3. [TCP/IP 详解](https://book.douban.com/subject/4707725/)
+  4. [Linux 多线程服务端编程](https://book.douban.com/subject/20471211/)
+  5. [The Rust Programming Language](https://doc.rust-lang.org/book/)
