@@ -34,6 +34,12 @@ impl Socket {
     pub fn set_keep_alive(&mut self, on: bool) {
         setsockopt(self.0, sockopt::KeepAlive, &on).unwrap();
     }
+    pub fn set_reuse_addr(&mut self, on: bool) {
+        setsockopt(self.0, sockopt::ReuseAddr, &on).unwrap();
+    }
+    pub fn set_reuse_port(&mut self, port: u16) {
+        setsockopt(self.0, sockopt::ReusePort, &port).unwrap();
+    }
     pub fn accept(sockfd: i32) -> Self {
         let connfd = accept4(sockfd, *NONBLOCKING_CLOEXEC).unwrap();
         Socket(connfd)
