@@ -37,8 +37,8 @@ impl Socket {
     pub fn set_reuse_addr(&mut self, on: bool) {
         setsockopt(self.0, sockopt::ReuseAddr, &on).unwrap();
     }
-    pub fn set_reuse_port(&mut self, port: u16) {
-        setsockopt(self.0, sockopt::ReusePort, &true).unwrap();
+    pub fn set_reuse_port(&mut self, on: bool) {
+        setsockopt(self.0, sockopt::ReusePort, &on).unwrap();
     }
     pub fn accept(sockfd: i32) -> Self {
         let connfd = accept4(sockfd, *NONBLOCKING_CLOEXEC).unwrap();
