@@ -499,6 +499,7 @@ impl Session {
         let addr = format!("0.0.0.0:{}", port);
         // TODO: Add connection fail handler
         let listener = TcpListener::bind(&addr).unwrap();
+        let listener = Socket(listener.as_raw_fd());
         self.send_answer(Answer::new(ResultCode::PassMode, &message));
         let mut s = Acceptor::accept(listener.as_raw_fd());
         s.set_keep_alive(true);

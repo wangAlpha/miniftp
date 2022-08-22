@@ -170,13 +170,13 @@ impl Connection {
         }
     }
 }
-// impl Drop for Connection {
-//     fn drop(&mut self) {
-//         if 0 > fcntl(self.sock.as_raw_fd(), FcntlArg::F_GETFL).unwrap() {
-//             self.shutdown();
-//         }
-//     }
-// }
+impl Drop for Connection {
+    fn drop(&mut self) {
+        if 0 > fcntl(self.sock.as_raw_fd(), FcntlArg::F_GETFL).unwrap() {
+            self.shutdown();
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
