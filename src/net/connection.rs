@@ -117,7 +117,7 @@ impl Connection {
     pub fn register_read(&mut self, event_loop: &mut EventLoop) {
         event_loop.reregister(
             self.sock.as_raw_fd(),
-            EVENT_HUP | EVENT_ERR | EVENT_WRIT| EVENT_READ | EVENT_LEVEL,
+            EVENT_HUP | EVENT_ERR | EVENT_WRIT | EVENT_READ | EVENT_LEVEL,
         );
     }
     pub fn deregister(&mut self, event_loop: &mut EventLoop) {
@@ -140,11 +140,7 @@ impl Connection {
         size: usize,
     ) -> Option<usize> {
         let mut off64 = off.unwrap_or(0);
-        let off = if off.is_none() {
-            None
-        } else {
-            Some(&mut off64)
-        };
+        let off = if off.is_none() { None } else { Some(&mut off64) };
         if let Some(file) = file {
             let fd = open(file, OFlag::O_RDWR, Mode::S_IRUSR).unwrap();
             let size = sendfile(self.sock.as_raw_fd(), fd, off, size).unwrap();
@@ -174,13 +170,13 @@ impl Connection {
         }
     }
 }
-impl Drop for Connection {
-    fn drop(&mut self) {
-        if 0 > fcntl(self.sock.as_raw_fd(), FcntlArg::F_GETFL).unwrap() {
-            self.shutdown();
-        }
-    }
-}
+// impl Drop for Connection {
+//     fn drop(&mut self) {
+//         if 0 > fcntl(self.sock.as_raw_fd(), FcntlArg::F_GETFL).unwrap() {
+//             self.shutdown();
+//         }
+//     }
+// }
 #[cfg(test)]
 mod tests {
     use super::*;

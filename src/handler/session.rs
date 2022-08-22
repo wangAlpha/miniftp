@@ -18,12 +18,12 @@ use nix::sys::stat::{fchmodat, lstat, FchmodatFlags, Mode, SFlag};
 use nix::sys::utsname::uname;
 use nix::unistd::{close, ftruncate, lseek, mkdir, unlink, write};
 use nix::unistd::{Gid, Group, Uid, User, Whence};
-use std::collections::HashMap;
 use std::fs::canonicalize;
 use std::os::unix::prelude::AsRawFd;
 use std::path::{Component, Path, PathBuf};
 use std::string::String;
 use std::time::Instant;
+use std::{collections::HashMap, net::TcpListener};
 
 pub const KILOGYTE: f64 = 1024f64;
 pub const MEGA_BYTE: f64 = KILOGYTE * 1024f64;
@@ -199,10 +199,7 @@ impl Session {
                 &format!("Welcome {}", self.name.clone().unwrap()),
             ));
         } else {
-            self.send_answer(Answer::new(
-                ResultCode::LongPassMode,
-                "Invalid password....",
-            ));
+            self.send_answer(Answer::new(ResultCode::LongPassMode, "Invalid password...."));
         }
     }
     // TODO: check passwd, and cd to current user directory
@@ -244,7 +241,7 @@ impl Session {
                 }
             }
             let user_dir = Path::new("/home").join(name.clone().unwrap_or(String::new()));
-            self.cur_dir =  if user_dir.exists() {
+            self.cur_dir = if user_dir.exists() {
                 user_dir
             } else {
                 self.cur_dir.join(name.clone().unwrap_or(String::new()))
@@ -257,18 +254,18 @@ impl Session {
         );
     }
     pub fn get_data_conn(&mut self) -> Option<Connection> {
-        let port = if let Some(port) = self.data_port {
-            port
-        } else {
-            22
-        };
+        let port = if let Some(port) = self.data_port { port } else { 22 };
         if self.pasv_enable {
             let c = self.data_conn.to_owned();
             self.data_conn = None;
             return c;
         } else {
             let addr = format!("127.0.0.1:{}", port);
-            let sock = Socket::connect(&addr);
+            let mut sock = Socket::connect(&addr);
+            sock.set_keep_alive(true);
+            sock.set_no_delay(true);
+            sock.set_reuse_addr(true);
+            sock.set_reuse_port(true);
             return Some(Connection::new(sock));
         }
     }
@@ -300,33 +297,24 @@ impl Session {
             let message = &format!("Folder {} successfully created!", path);
             self.send_answer(Answer::new(ResultCode::FileActOk, &message));
         } else {
-            self.send_answer(Answer::new(
-                ResultCode::FileNameNotAllow,
-                "Couldn't create folder",
-            ));
+            self.send_answer(Answer::new(ResultCode::FileNameNotAllow, "Couldn't create folder"));
         }
     }
     fn rmd(&mut self, path: PathBuf) {
         // check path
-        if self.is_admin && is_exist(path.to_str().unwrap_or("")) && path.is_dir() && remove_dir_all(&path) {
-            self.send_answer(Answer::new(
-                ResultCode::FileActOk,
-                "Folder successufully removed",
-            ));
+        if self.is_admin
+            && is_exist(path.to_str().unwrap_or(""))
+            && path.is_dir()
+            && remove_dir_all(&path)
+        {
+            self.send_answer(Answer::new(ResultCode::FileActOk, "Folder successufully removed"));
         } else {
-            self.send_answer(Answer::new(
-                ResultCode::FileNotFound,
-                "Couldn't remove folder",
-            ));
+            self.send_answer(Answer::new(ResultCode::FileNotFound, "Couldn't remove folder"));
         }
     }
     fn delete(&mut self, path: PathBuf) {
         let mut ok = false;
-        let path = if path.is_absolute() {
-            path
-        } else {
-            self.cur_dir.join(path)
-        };
+        let path = if path.is_absolute() { path } else { self.cur_dir.join(path) };
         if is_exist(path.to_str().unwrap()) && is_regular(path.to_str().unwrap()) {
             match unlink(&path) {
                 Ok(_) => ok = true,
@@ -372,17 +360,11 @@ impl Session {
         }
         self.file_name = None;
         if ok {
-            let message = format!(
-                "Rename file {} successful rename to {}",
-                old_path.unwrap(),
-                new_file
-            );
+            let message =
+                format!("Rename file {} successful rename to {}", old_path.unwrap(), new_file);
             self.send_answer(Answer::new(ResultCode::FileActOk, &message));
         } else {
-            self.send_answer(Answer::new(
-                ResultCode::FileNameNotAllow,
-                "Coldn't rename file",
-            ));
+            self.send_answer(Answer::new(ResultCode::FileNameNotAllow, "Coldn't rename file"));
         }
     }
     fn site(&mut self, contents: Vec<String>) {
@@ -392,10 +374,7 @@ impl Session {
             if let Ok(mode) = contents[1].parse::<u32>() {
                 self.mode = mode;
                 ok = true;
-                self.send_answer(Answer::new(
-                    ResultCode::Ok,
-                    &format!("UMASK set to {}", mode),
-                ));
+                self.send_answer(Answer::new(ResultCode::Ok, &format!("UMASK set to {}", mode)));
             }
         } else if contents.len() == 3 && contents[0] == "chmod" {
             if let Ok(mode) = contents[1].parse::<u32>() {
@@ -421,16 +400,11 @@ impl Session {
     fn rest(&mut self, content: String) {
         if let Ok(n) = content.parse::<i64>() {
             self.resume_point = n;
-            let message = format!(
-                "Restarting at {}. execute get, put or append to initiate transfer",
-                n
-            );
+            let message =
+                format!("Restarting at {}. execute get, put or append to initiate transfer", n);
             self.send_answer(Answer::new(ResultCode::FileActionPending, &message));
         } else {
-            self.send_answer(Answer::new(
-                ResultCode::BadCmdSeq,
-                "Couldn't restart break point",
-            ));
+            self.send_answer(Answer::new(ResultCode::BadCmdSeq, "Couldn't restart break point"));
         }
     }
     fn cwd(&mut self, dir: PathBuf) {
@@ -450,10 +424,7 @@ impl Session {
                 "Change current path successfully",
             ));
         } else {
-            self.send_answer(Answer::new(
-                ResultCode::FileNotFound,
-                "No such file or directory",
-            ));
+            self.send_answer(Answer::new(ResultCode::FileNotFound, "No such file or directory"));
         }
     }
     fn cdup(&mut self) {
@@ -470,10 +441,7 @@ impl Session {
                 "Change current path successfully",
             ));
         } else {
-            self.send_answer(Answer::new(
-                ResultCode::FileNotFound,
-                "No such file or directory",
-            ));
+            self.send_answer(Answer::new(ResultCode::FileNotFound, "No such file or directory"));
         }
     }
     fn list(&mut self, path: Option<PathBuf>, add_info: bool) {
@@ -521,28 +489,22 @@ impl Session {
             c.shutdown();
             self.send_answer(Answer::new(ResultCode::CloseDataClose, "Directory send Ok"));
         } else {
-            self.send_answer(Answer::new(
-                ResultCode::ConnClose,
-                "No opened data connection",
-            ));
+            self.send_answer(Answer::new(ResultCode::ConnClose, "No opened data connection"));
         }
     }
     fn pasv(&mut self) {
         self.pasv_enable = true;
-        let port = if let Some(port) = self.data_port {
-            port
-        } else {
-            22
-        };
-        let message = format!(
-            "Entering Passive Mode (127,0,0,1,{},{})",
-            port >> 8,
-            port & 0xFF
-        );
+        let port = if let Some(port) = self.data_port { port + 2 } else { 22 };
+        let message = format!("Entering Passive Mode (127,0,0,1,{},{})", port >> 8, port & 0xFF);
         let addr = format!("0.0.0.0:{}", port);
-        let listener = Socket::bind(&addr);
+        // TODO: Add connection fail handler
+        let listener = TcpListener::bind(&addr).unwrap();
         self.send_answer(Answer::new(ResultCode::PassMode, &message));
-        let s = Acceptor::accept(listener.as_raw_fd());
+        let mut s = Acceptor::accept(listener.as_raw_fd());
+        s.set_keep_alive(true);
+        s.set_no_delay(true);
+        s.set_reuse_addr(true);
+        s.set_reuse_port(true);
         self.data_conn = Some(Connection::new(s));
     }
     fn port(&mut self, port: u16) {
@@ -564,10 +526,7 @@ impl Session {
             let message = format!("{}", size);
             self.send_answer(Answer::new(ResultCode::FileStatus, &message));
         } else {
-            self.send_answer(Answer::new(
-                ResultCode::FileNotFound,
-                "Could not get file size.",
-            ));
+            self.send_answer(Answer::new(ResultCode::FileNotFound, "Could not get file size."));
         }
     }
     fn pwd(&mut self) {
@@ -576,10 +535,7 @@ impl Session {
             let msg = format!("\"{}\"", message);
             self.send_answer(Answer::new(ResultCode::CreatPath, msg.as_str()));
         } else {
-            self.send_answer(Answer::new(
-                ResultCode::FileNotFound,
-                "No such file or directory",
-            ));
+            self.send_answer(Answer::new(ResultCode::FileNotFound, "No such file or directory"));
         }
     }
     fn quit(&mut self) {
@@ -635,10 +591,7 @@ impl Session {
             }
             c.shutdown();
         } else {
-            self.send_answer(Answer::new(
-                ResultCode::ConnClose,
-                "No opened data connection",
-            ));
+            self.send_answer(Answer::new(ResultCode::ConnClose, "No opened data connection"));
         }
     }
     // example:
@@ -666,10 +619,8 @@ impl Session {
                     lseek(fd, 0, Whence::SeekSet)
                         .expect(&format!("Couldn't lseek file: {} at {}", path, 0));
                 } else {
-                    lseek(fd, self.resume_point, Whence::SeekSet).expect(&format!(
-                        "Couldn't lseek file: {} at {}",
-                        path, self.resume_point
-                    ));
+                    lseek(fd, self.resume_point, Whence::SeekSet)
+                        .expect(&format!("Couldn't lseek file: {} at {}", path, self.resume_point));
                     self.resume_point = 0;
                 }
                 let instant = Instant::now();
@@ -692,10 +643,7 @@ impl Session {
                 close(fd).unwrap();
                 let elapsed = instant.elapsed().as_secs_f64();
                 let size = format_size(len as f64 / elapsed);
-                info!(
-                    "{} bytes received in {:.2} secs ({}B/s)",
-                    len, elapsed, size
-                );
+                info!("{} bytes received in {:.2} secs ({}B/s)", len, elapsed, size);
                 c.shutdown();
                 self.send_answer(Answer::new(
                     ResultCode::CloseDataClose,
@@ -706,10 +654,7 @@ impl Session {
                 self.send_answer(Answer::new(ResultCode::FileNotFound, "Couldn't open file"));
             }
         } else {
-            self.send_answer(Answer::new(
-                ResultCode::DataConnFail,
-                "No opened data connection",
-            ));
+            self.send_answer(Answer::new(ResultCode::DataConnFail, "No opened data connection"));
         }
     }
     fn help(&mut self, content: String) {
@@ -727,27 +672,12 @@ impl Session {
         HashMap::from([
             ("open", "open hostname [ port ] - open new connection"),
             ("user", "user username - send new user information"),
-            (
-                "cd",
-                "cd remote-directory - change remote working directory",
-            ),
-            (
-                "ls",
-                "ls [ remote-directory ] - print list of files in the remote directory",
-            ),
-            (
-                "put",
-                "put local-file [ remote-file ] - store a file at the server",
-            ),
-            (
-                "pwd",
-                "get remote-file [ local-file ] - retrieve a copy of the file",
-            ),
+            ("cd", "cd remote-directory - change remote working directory"),
+            ("ls", "ls [ remote-directory ] - print list of files in the remote directory"),
+            ("put", "put local-file [ remote-file ] - store a file at the server"),
+            ("pwd", "get remote-file [ local-file ] - retrieve a copy of the file"),
             ("mkdir", "pwd - print the current working directory name"),
-            (
-                "rmdir",
-                "mkdir directory-name - make a directory on the remote machine",
-            ),
+            ("rmdir", "mkdir directory-name - make a directory on the remote machine"),
             ("del", "rmdir directory-name - remove a directory"),
             ("del", "del remote-file - delete a file"),
             ("binary", "binary - set binary transfer type"),
@@ -761,10 +691,7 @@ impl Session {
         ])
     }
     fn abort(&mut self) {
-        self.send_answer(Answer::new(
-            ResultCode::CloseDataClose,
-            "No transfer to Abort!",
-        ));
+        self.send_answer(Answer::new(ResultCode::CloseDataClose, "No transfer to Abort!"));
     }
     fn send_answer(&mut self, answer: Answer) {
         let mut buf = Vec::new();
@@ -804,6 +731,7 @@ pub fn permissions(mode: u32) -> String {
 // drwxr-xr-x 19 root root 646 Apr  3 12:14 ..
 // drwxr-xr-x  8 root root 272 Mar 29 20:33 handler/
 // -rw-r--r--  1 root root 168 Mar 28 17:49 lib.rs
+// FIXME: fix to user name case
 pub fn add_file_info(path: &str, out: &mut Vec<u8>) {
     if path.is_empty() {
         return;
@@ -839,9 +767,7 @@ pub fn add_file_info(path: &str, out: &mut Vec<u8>) {
     let rights = permissions(stat.st_mode);
     let links = stat.st_nlink;
     let user = User::from_uid(Uid::from_raw(stat.st_uid)).unwrap().unwrap();
-    let group = Group::from_gid(Gid::from_raw(stat.st_gid))
-        .unwrap()
-        .unwrap();
+    let group = Group::from_gid(Gid::from_raw(stat.st_gid)).unwrap().unwrap();
     let path = path.split('/').last().unwrap();
 
     let file_str = format!(
